@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin - Gestion des Secrets</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script> <!-- SweetAlert pour notifications modernes -->
+</head>
+<body>
+    <!-- Barre de Navigation -->
+    <nav class="navbar">
+        <a href="index.html">Soumettre un Secret</a>
+        <a href="liste_secrets.html">Voir les Secrets</a>
+        <a href="leaderboard.html">Classement</a>
+        <a href="admin.html">Admin</a>
+    </nav>
+
+    <!-- Logo seul, sans texte -->
+    <div class="site-title">
+        <img src="images/logo-secret-bafa.png" alt="Logo Secret BAFA" class="logo">
+    </div>
+
+    <!-- Titre de la page -->
+    <h1>Gestion des Secrets</h1>
+
+    <!-- Conteneur pour la gestion des secrets -->
+    <div id="adminContainer"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Charger les secrets depuis le localStorage
+            const secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+            const adminContainer = document.getElementById('adminContainer');
+
+            // Réinitialise le conteneur
+            adminContainer.innerHTML = "";
+
+            // Afficher chaque secret sous forme de carte avec des options d'administration
+            if (secrets.length > 0) {
+                secrets.forEach((entry, index) => {
+                    const secretCard = document.createElement('div');
+                    secretCard.classList.add('admin-card');
+
+                    // Contenu de la carte : afficher le nom et le secret
+                    secretCard.innerHTML = `
+                        <p><strong>Nom:</strong> ${entry.name}</p>
+                        <p><strong>Secret:</strong> ${entry.secret}</p>
+                        <label for="points-${index}">Points :</label>
+                        <input type="number" id="points-${index}" value="${entry.points || 0}" min="0">
+                        <button onclick="updatePoints(${index})">Mettre à jour les points</button>
+                        <button onclick="toggleReveal(${index}, this)">${entry.isRevealed ? 'Cacher le nom' : 'Révéler le nom'}</button>
+                        <button onclick="deleteSecret(${index})">Supprimer</button>
+                    `;
+                    adminContainer.appendChild(secretCard);
+                });
+            } else {
+                adminContainer.innerHTML = "<p>Aucun secret pour l'instant.</p>";
+            }
+        });
+
+        // Mettre à jour les points d'un secret
+        function updatePoints(index) {
+            let secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+            const pointsInput = document.getElementById(`points-${index}`);
+            const points = parseInt(pointsInput.value, 10);
+
+            if (!isNaN(points) && points >= 0) {
+                secrets[index].points = points;
+                localStorage.setItem('secrets', JSON.stringify(secrets));
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Points mis à jour',
+                    text: 'Les points ont été mis à jour avec succès.',
+                    timer: 1500
+                });
+            } else {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Erreur',
+                    text: 'Veuillez entrer un nombre valide pour les points.'
+                });
+            }
+        }
+
+        // Révéler le nom d'un secret
+        function toggleReveal(index, button) {
+            let secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+            secrets[index].isRevealed = !secrets[index].isRevealed;
+            localStorage.setItem('secrets', JSON.stringify(secrets));
+            button.textContent = secrets[index].isRevealed ? 'Cacher le nom' : 'Révéler le nom';
+            Swal.fire({
+                icon: 'success',
+                title: secrets[index].isRevealed ? 'Nom révélé' : 'Nom caché',
+                text: secrets[index].isRevealed ? 'Le nom du participant a été révélé.' : 'Le nom du participant a été caché.',
+                timer: 1500
+            }).then(() => {
+                // Mettre à jour l'affichage sur la page "Liste des Secrets"
+                window.dispatchEvent(new Event('storage'));
+            });
+        }
+
+        // Supprimer un secret
+        function deleteSecret(index) {
+            let secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+            secrets.splice(index, 1);
+            localStorage.setItem('secrets', JSON.stringify(secrets));
+            Swal.fire({
+                icon: 'success',
+                title: 'Secret supprimé',
+                text: 'Le secret a été supprimé avec succès.',
+                timer: 1500
+            }).then(() => {
+                location.reload();
+            });
+        }
+    </script>
+</body>
+</html>
+<footer style="background-color: #f4f4f4; color: #333; padding: 20px; text-align: center; width: 100%; margin-top: 20px;">
+    <p>Mentions légales : Ce site a été créé par <strong>_adrienm_</strong>, et il est tout simplement magnifique.</p>
+</footer>
+</body>
+</html>

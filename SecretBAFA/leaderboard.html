@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Classement des Participants</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script> <!-- SweetAlert pour notifications modernes -->
+</head>
+<body>
+    <!-- Barre de Navigation -->
+    <nav class="navbar">
+        <a href="index.html">Soumettre un Secret</a>
+        <a href="liste_secrets.html">Voir les Secrets</a>
+        <a href="leaderboard.html">Classement</a>
+        <a href="admin.html">Admin</a>
+    </nav>
+
+    <!-- Logo sans texte -->
+    <div class="site-title">
+        <img src="images/logo-secret-bafa.png" alt="Logo Secret BAFA" class="logo">
+    </div>
+
+    <!-- Titre de la page -->
+    <h1>Classement des Participants</h1>
+
+    <!-- Conteneur pour le classement -->
+    <div id="leaderboardContainer"></div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Charger les secrets depuis le localStorage
+            const secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+            const leaderboardContainer = document.getElementById('leaderboardContainer');
+
+            // Réinitialise le conteneur
+            leaderboardContainer.innerHTML = "";
+
+            // Filtrer les participants ayant des points et les trier par ordre décroissant
+            const leaderboard = secrets
+                .filter(entry => entry.points && entry.points > 0) // Garde seulement ceux avec des points
+                .sort((a, b) => b.points - a.points); // Trie par points décroissants
+
+            // Afficher le classement
+            if (leaderboard.length > 0) {
+                leaderboard.forEach((entry, index) => {
+                    const rankCard = document.createElement('div');
+                    rankCard.classList.add('card');
+
+                    // Ajouter des classes pour les styles des premiers rangs
+                    rankCard.classList.add(`rank-${index + 1}`);
+
+                    rankCard.innerHTML = `
+                        <p><strong>Rang #${index + 1}:</strong> ${entry.name} - ${entry.points} points</p>
+                    `;
+                    leaderboardContainer.appendChild(rankCard);
+                });
+            } else {
+                leaderboardContainer.innerHTML = "<p>Aucun participant n'a encore de points.</p>";
+            }
+        });
+
+        // Mettre à jour le classement en temps réel si le localStorage est modifié
+        window.addEventListener('storage', function(event) {
+            if (event.key === 'secrets') {
+                const secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+                const leaderboardContainer = document.getElementById('leaderboardContainer');
+
+                // Réinitialise le conteneur
+                leaderboardContainer.innerHTML = "";
+
+                // Filtrer les participants ayant des points et les trier par ordre décroissant
+                const leaderboard = secrets
+                    .filter(entry => entry.points && entry.points > 0) // Garde seulement ceux avec des points
+                    .sort((a, b) => b.points - a.points); // Trie par points décroissants
+
+                // Afficher le classement
+                if (leaderboard.length > 0) {
+                    leaderboard.forEach((entry, index) => {
+                        const rankCard = document.createElement('div');
+                        rankCard.classList.add('card');
+
+                        // Ajouter des classes pour les styles des premiers rangs
+                        rankCard.classList.add(`rank-${index + 1}`);
+
+                        rankCard.innerHTML = `
+                            <p><strong>Rang #${index + 1}:</strong> ${entry.name} - ${entry.points} points</p>
+                        `;
+                        leaderboardContainer.appendChild(rankCard);
+                    });
+                } else {
+                    leaderboardContainer.innerHTML = "<p>Aucun participant n'a encore de points.</p>";
+                }
+            }
+        });
+    </script>
+<footer style="background-color: #f4f4f4; color: #333; padding: 20px; text-align: center; width: 100%; margin-top: 20px;">
+    <p>Mentions légales : Ce site a été créé par <strong>_adrienm_</strong>, et il est tout simplement magnifique.</p>
+</footer>
+</body>
+</html>

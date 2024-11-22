@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secret BAFA</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script> <!-- SweetAlert pour notifications modernes -->
+</head>
+<body>
+    <nav class="navbar">
+        <a href="index.html">Soumettre un Secret</a>
+        <a href="liste_secrets.html">Voir les Secrets</a>
+        <a href="leaderboard.html">Classement</a>
+        <a href="#" id="adminLink">Admin</a>
+    </nav>
+
+    <!-- Logo sans texte -->
+    <div class="site-title">
+        <img src="images/logo-secret-bafa.png" alt="Logo Secret BAFA" class="logo">
+    </div>
+
+    <!-- Formulaire pour saisir un secret -->
+    <div class="form-container" style="border-radius: 15px; padding: 25px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);">
+        <form id="secretForm">
+            <div class="form-group">
+                <label for="name" aria-label="Nom (minimum 3 caractères)">Nom :</label>
+                <input type="text" id="name" name="name" placeholder="Ton prénom..." required minlength="3" style="width: 100%; height: 35px;">
+            </div>
+            <div class="form-group">
+                <label for="secret" aria-label="Ton secret (minimum 10 caractères)">Ton Secret :</label>
+                <textarea id="secret" name="secret" placeholder="Ton secret ici (min. 10 caractères)..." required minlength="10" style="width: 100%; height: 120px;"></textarea>
+            </div>
+
+            <button type="submit" style="border-radius: 10px; padding: 10px 20px;">Soumettre</button>
+        </form>
+        <div id="loader" class="hidden" style="display: none;">En cours...</div>
+    </div>
+
+    <script>
+        document.getElementById('secretForm').addEventListener('submit', function(event) {
+            event.preventDefault();
+
+            const name = document.getElementById('name').value.trim();
+            const secret = document.getElementById('secret').value.trim();
+            const submitButton = document.querySelector('button[type="submit"]');
+            const loader = document.getElementById('loader');
+
+            // Validation des champs
+            if (!name || name.length < 3) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Erreur',
+                    text: 'Le nom doit contenir au moins 3 caractères.'
+                });
+                return;
+            }
+            if (!secret || secret.length < 10) {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Erreur',
+                    text: 'Le secret doit contenir au moins 10 caractères.'
+                });
+                return;
+            }
+
+            // Désactive le bouton pour éviter des soumissions répétées
+            submitButton.disabled = true;
+            loader.classList.remove('hidden'); loader.style.display = 'block';
+
+            try {
+                // Simule l'ajout du secret dans une base de données locale
+                let secrets = JSON.parse(localStorage.getItem('secrets')) || [];
+
+                secrets.push({
+                    name: name,
+                    secret: secret,
+                    isRevealed: false,
+                    timestamp: new Date().toISOString()
+                });
+
+                localStorage.setItem('secrets', JSON.stringify(secrets));
+
+                // Réinitialise le formulaire et affiche un message de confirmation plus moderne
+                document.getElementById('secretForm').reset();
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Succès',
+                    text: 'Secret ajouté avec succès !',
+                    showConfirmButton: false,
+                    timer: 1500
+                }).then(() => {
+                    // Rediriger vers la page de la liste des secrets
+                    window.location.href = 'liste_secrets.html';
+                });
+
+            } catch (error) {
+                console.error("Erreur lors de l'ajout du secret : ", error);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Erreur',
+                    text: error.message || 'Une erreur est survenue. Veuillez réessayer.'
+                });
+            } finally {
+                // Réactiver le bouton après l'envoi du formulaire
+                submitButton.disabled = false;
+                loader.classList.add('hidden'); loader.style.display = 'none';
+            }
+        });
+    </script>
+<script>
+        // Accès sécurisé à la page admin
+        document.getElementById('adminLink').addEventListener('click', function(event) {
+            event.preventDefault();
+            Swal.fire({
+                title: 'Entrez le mot de passe',
+                input: 'password',
+                inputLabel: 'Mot de passe requis',
+                inputPlaceholder: 'Entrez le mot de passe',
+                showCancelButton: true,
+                confirmButtonText: 'Valider',
+                preConfirm: (password) => {
+                    if (password !== 'admin123') {
+                        Swal.showValidationMessage('Mot de passe incorrect');
+                    }
+                }
+            }).then((result) => {
+                if (result.isConfirmed && result.value === 'admin123') {
+                    window.location.href = 'admin.html';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
+<footer style="background-color: #f4f4f4; color: #333; padding: 20px; text-align: center; width: 100%; margin-top: 20px;">
+    <p>Mentions légales : Ce site a été créé par <strong>_adrienm_</strong>, et il est tout simplement magnifique.</p>
+</footer>
+</body>
+</html>
