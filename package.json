@@ -8,13 +8,23 @@
   "scripts": {
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
-    "test": "node test/e2e.js"
+    "test": "node test/e2e.js",
+    "test:rules": "firebase emulators:exec --only firestore --project secret-bafa-test \"node test/rules.test.js\"",
+    "test:api": "node test/e2e.js",
+    "build:firebase": "esbuild build/firebase-entry.js --bundle --format=esm --minify --target=es2020 --outfile=web/js/firebase.js --legal-comments=none",
+    "test:web": "firebase emulators:exec --only auth,firestore,hosting --project secret-bafa-test \"node test/e2e-web.js\""
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@libsql/client": "^0.18.0",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "firebase": "^12.18.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "esbuild": "^0.28.2",
+    "firebase-tools": "^15.29.0"
   }
 }

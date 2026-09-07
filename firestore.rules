@@ -1,0 +1,144 @@
+rules_version = '2';
+
+// Secret BAFA — qui a le droit de lire et d'écrire quoi.
+//
+// Tout le jeu tient dans ces règles : le navigateur parle directement à la
+// base, donc c'est ici, et nulle part ailleurs, que l'information reste
+// cachée. Trois secrets bien gardés :
+//   1. le lien entre un secret et son auteur (collection `authorOf`),
+//   2. les votes de la journée en cours (collection `votes`),
+//   3. quel secret appartient à qui (collection `mine`).
+// Seul l'animateur peut les lire. C'est son navigateur qui, au moment du
+// reveal, publie ce qui doit devenir public dans `results` et `scores`.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function isAdmin() {
+      return signedIn() && exists(/databases/$(database)/documents/admins/$(uid()));
+    }
+    function game() {
+      return get(/databases/$(database)/documents/game/state).data;
+    }
+    function authorOf(secretId) {
+      return get(/databases/$(database)/documents/authorOf/$(secretId)).data.uid;
+    }
+
+    // ── État de la partie ───────────────────────────────────────────────
+    // Lisible par tous les joueurs, piloté par le seul animateur. Le tout
+    // premier joueur a le droit de le créer, mais uniquement vierge.
+    match /game/state {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && request.resource.data.phase == 'lobby'
+                    && request.resource.data.day == 0;
+      allow write: if isAdmin();
+    }
+
+    // ── Comptes ────────────────────────────────────────────────────────
+    match /players/{playerId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && playerId == uid()
+                    && request.resource.data.name is string
+                    && request.resource.data.name.size() >= 2
+                    && request.resource.data.name.size() <= 30;
+      // Chacun signale qu'il a déposé son secret — sans dire lequel.
+      // C'est ce qui permet aux autres de savoir qui est encore suspect.
+      allow update: if signedIn()
+                    && playerId == uid()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hasSecret'])
+                    && request.resource.data.hasSecret == true;
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Quel secret est le mien ────────────────────────────────────────
+    // Si cette collection était publique, elle donnerait tout le jeu.
+    match /mine/{playerId} {
+      allow read: if signedIn() && (playerId == uid() || isAdmin());
+      allow create: if signedIn() && playerId == uid();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Lien secret → auteur ───────────────────────────────────────────
+    // Personne ne lit cette collection, sauf l'animateur.
+    match /authorOf/{secretId} {
+      allow read: if isAdmin();
+      allow create: if signedIn() && request.resource.data.uid == uid();
+      allow update, delete: if isAdmin();
+    }
+
+    // ── Les secrets ────────────────────────────────────────────────────
+    // Le texte est public, l'auteur ne l'est jamais : il n'y a pas de champ
+    // pour lui. On ne peut créer un secret qu'en déclarant, dans la même
+    // opération, qu'on en est l'auteur.
+    match /secrets/{secretId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && getAfter(/databases/$(database)/documents/authorOf/$(secretId)).data.uid == uid()
+                    && game().phase == 'lobby'
+                    && request.resource.data.solvedDay == null
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() >= 10
+                    && request.resource.data.text.size() <= 500;
+      allow update: if signedIn()
+                    && authorOf(secretId) == uid()
+                    && game().phase == 'lobby'
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text'])
+                    && request.resource.data.text.size() >= 10
+                    && request.resource.data.text.size() <= 500;
+      allow write: if isAdmin();
+    }
+
+    // ── Votes ──────────────────────────────────────────────────────────
+    // Scellés : tu ne relis que le tien. L'identifiant du document est
+    // « jour_utilisateur », ce qui interdit mécaniquement le second vote.
+    match /votes/{voteId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.voter == uid());
+      allow create: if signedIn()
+                    && voteId == string(request.resource.data.day) + '_' + uid()
+                    && request.resource.data.voter == uid()
+                    && request.resource.data.day == game().day
+                    && game().roundStatus == 'open'
+                    && game().phase == 'jeu'
+                    && request.resource.data.guess != uid()
+                    && authorOf(request.resource.data.secretId) != uid();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ── Ce que l'animateur rend public au reveal ───────────────────────
+    match /results/{day} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+    match /scores/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // ── Le rôle d'animateur ────────────────────────────────────────────
+    // Le premier qui le réclame le prend, et le verrou se referme :
+    // il n'y a jamais de second animateur.
+    match /admins/{playerId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+                    && playerId == uid()
+                    && !exists(/databases/$(database)/documents/adminLock/lock)
+                    && getAfter(/databases/$(database)/documents/adminLock/lock).data.claimed == true;
+      allow update, delete: if false;
+    }
+    match /adminLock/lock {
+      allow read: if signedIn();
+      allow create: if signedIn() && !exists(/databases/$(database)/documents/adminLock/lock);
+      allow update, delete: if false;
+    }
+
+    // Tout le reste est fermé.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
