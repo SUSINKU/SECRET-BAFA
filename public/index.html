@@ -2,67 +2,46 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Secret BAFA — Connexion</title>
-<meta name="description" content="Le jeu des secrets pour les formations BAFA.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Secret BAFA</title>
+<meta name="description" content="Le jeu des secrets pour les formations BAFA : un secret par stagiaire, un vote par jour, un reveal le soir.">
+<meta name="theme-color" content="#8B5CF6">
 <link rel="icon" href="images/logo-secret-bafa.png">
-<link rel="stylesheet" href="styles.css">
+<link rel="apple-touch-icon" href="images/logo-secret-bafa.png">
+<link rel="preload" as="font" type="font/woff2" href="fonts/poppins-800-latin.woff2" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/app.css">
 </head>
 <body>
-<header class="topbar">
-  <img src="images/logo-secret-bafa.png" alt="Secret BAFA">
-  <h1 id="gameName">Secret BAFA</h1>
-  <div class="sub">Le jeu des secrets de la formation</div>
+
+<header class="hero" id="hero">
+  <div class="hero__blobs" aria-hidden="true"><i></i><i></i></div>
+  <div class="hero__inner">
+    <div class="brand">
+      <span class="brand__mark">🤫</span>
+      <span id="gameName">Secret BAFA</span>
+    </div>
+    <div class="hero__pill" id="statusLine">Chargement…</div>
+    <h1 id="heroTitle"></h1>
+    <p class="hero__sub" id="heroSub"></p>
+    <div class="hero__stats" id="heroStats"></div>
+    <div class="progress hidden" id="heroProgress">
+      <div class="progress__track"><div class="progress__fill" id="progressFill" style="width:0%"></div></div>
+      <div class="progress__label" id="progressLabel"></div>
+    </div>
+  </div>
 </header>
 
+<nav class="tabs hidden" id="tabs" aria-label="Sections du jeu"></nav>
+
 <main class="wrap">
-  <div id="alreadyIn" class="banner ok hidden">
-    Tu es déjà connecté·e. <a href="jeu.html">Rejoindre la partie →</a>
+  <div id="screen">
+    <div class="card"><h2>Chargement…</h2><p class="muted">On récupère l'état de la partie.</p></div>
   </div>
-
-  <section class="card">
-    <h2>Comment on joue&nbsp;?</h2>
-    <ol class="muted">
-      <li>Chacun·e s'inscrit et dépose <strong>un secret</strong>, qui reste anonyme.</li>
-      <li>Chaque jour, tu as <strong>un seul vote</strong> : tu choisis un secret et tu désignes la personne qui l'a écrit selon toi.</li>
-      <li>Le soir, l'animateur clôture la journée : <strong>tous les votes sont révélés</strong>.</li>
-      <li><strong id="ptsCorrect">+3</strong> points si tu trouves le bon auteur. <strong id="ptsWrong">+1</strong> point pour l'auteur d'un secret à chaque fois que quelqu'un se trompe sur lui.</li>
-    </ol>
-    <p class="muted">Un secret démasqué sort du jeu : son auteur est affiché pour tout le monde.</p>
-  </section>
-
-  <section class="card">
-    <div class="tabs" style="position:static;border-bottom:1px solid var(--line);margin:-18px -18px 12px;border-radius:14px 14px 0 0">
-      <button id="tabLogin" aria-selected="true">Se connecter</button>
-      <button id="tabRegister" aria-selected="false">Créer mon compte</button>
-    </div>
-
-    <form id="loginForm">
-      <label for="loginName">Ton prénom</label>
-      <input type="text" id="loginName" autocomplete="username" placeholder="Comme à l'inscription" required>
-      <label for="loginPassword">Ton mot de passe</label>
-      <input type="password" id="loginPassword" autocomplete="current-password" required>
-      <button class="btn full" type="submit">Entrer dans la partie</button>
-    </form>
-
-    <form id="registerForm" class="hidden">
-      <label for="regName">Ton prénom</label>
-      <input type="text" id="regName" autocomplete="username" placeholder="Camille, Camille B., ..." required>
-      <label for="regPassword">Choisis un mot de passe</label>
-      <input type="password" id="regPassword" autocomplete="new-password" placeholder="4 caractères minimum" required>
-      <p class="muted">Il sert juste à empêcher quelqu'un de voter à ta place. Ne mets pas un mot de passe que tu utilises ailleurs.</p>
-      <button class="btn full" type="submit">Je m'inscris</button>
-    </form>
-
-    <div id="message"></div>
-  </section>
-
-  <p class="center"><a href="animateur.html" class="muted">Espace animateur</a></p>
 </main>
 
-<footer>Secret BAFA — à jouer entre stagiaires, avec bienveillance. Aucun secret ne sort de la formation.</footer>
+<footer>Un secret, ça reste dans la formation.</footer>
 
-<script src="js/common.js"></script>
-<script src="js/accueil.js"></script>
+<script src="js/app.js"></script>
 </body>
 </html>

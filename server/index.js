@@ -301,8 +301,21 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Route inconnue.' })
 
 if (require.main === module) {
   app.listen(PORT, () => {
-    console.log(`Secret BAFA — http://localhost:${PORT}`);
+    console.log(`Secret BAFA écoute sur le port ${PORT}`);
+    for (const url of localUrls(PORT)) console.log(`  ${url}`);
   });
+}
+
+/** Les adresses à donner aux stagiaires quand le jeu tourne sur un poste de la salle. */
+function localUrls(port) {
+  const urls = [`http://localhost:${port}`];
+  const interfaces = require('os').networkInterfaces();
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries || []) {
+      if (entry.family === 'IPv4' && !entry.internal) urls.push(`http://${entry.address}:${port}`);
+    }
+  }
+  return urls;
 }
 
 module.exports = app;

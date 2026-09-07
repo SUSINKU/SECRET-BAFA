@@ -32,25 +32,14 @@ npm start          # http://localhost:3000
 
 Puis :
 
-1. Va sur `/animateur.html`, connecte-toi (mot de passe par défaut **`bafa2026`**) et
-   **change-le tout de suite** dans les réglages.
+1. Ouvre l'onglet **Animateur**, connecte-toi (mot de passe par défaut
+   **`bafa2026`**) et **change-le tout de suite** dans les réglages.
 2. Les stagiaires vont sur la page d'accueil, créent leur compte et déposent leur secret.
 3. Quand tout le monde a déposé, clique sur **« Lancer la partie »** : les secrets sont
    verrouillés et la journée 1 s'ouvre.
-4. Le soir, **« Clôturer la journée & révéler »** : les votes deviennent publics et les
+4. Le soir, **« Clôturer & révéler »** : les votes deviennent publics et les
    points sont attribués. Le lendemain, **« Ouvrir la journée suivante »**.
 5. **« Terminer la partie »** révèle tous les secrets restants et fige le classement.
-
-### Variables d'environnement
-
-| Variable | Défaut | Rôle |
-|---|---|---|
-| `PORT` | `3000` | Port d'écoute |
-| `ADMIN_PASSWORD` | `bafa2026` | Mot de passe animateur, **au tout premier démarrage seulement** (ensuite il se change dans les réglages) |
-| `GAME_NAME` | `Secret BAFA` | Nom affiché, idem premier démarrage |
-| `DATA_DIR` | `./data` | Dossier de la base SQLite |
-| `DB_FILE` | `$DATA_DIR/secret-bafa.db` | Chemin complet de la base |
-| `SECURE_COOKIES` | — | Mettre à `1` derrière HTTPS |
 
 ## Tests
 
@@ -61,22 +50,49 @@ npm test
 Le test simule une partie complète de bout en bout (inscriptions, dépôt des secrets,
 journées de vote, reveals, barème, fin de partie, remise à zéro) contre une base jetable.
 
-## Déploiement
+## Mettre le jeu en ligne
 
-L'app est un serveur Node classique, elle tourne telle quelle sur Render, Railway, Fly.io
-ou un petit VPS :
+Trois chemins, du plus simple au plus solide.
 
-- commande de build : `npm install`
-- commande de démarrage : `npm start`
-- `SECURE_COOKIES=1` et un `ADMIN_PASSWORD` à toi
+### 1. Sur un ordinateur de la salle (gratuit, sans internet)
 
-⚠️ La base est un fichier SQLite. Sur un hébergeur au système de fichiers éphémère
-(Render free, Heroku…), **monte un disque persistant** et pointe `DATA_DIR` dessus, sinon
-la partie repart de zéro à chaque redéploiement.
+Le plus adapté à une formation : le jeu tourne sur ton portable (`npm start`,
+comme ci-dessus) et les stagiaires s'y connectent par le Wi-Fi de la salle.
 
-Pour un usage en salle de formation, le plus simple reste de lancer le serveur sur un
-ordinateur connecté au même réseau Wi-Fi que les stagiaires et de leur donner l'adresse
-`http://<ip-du-poste>:3000`.
+Le serveur affiche au démarrage les adresses à donner, du genre
+`http://192.168.1.42:3000` — c'est celle-là que les stagiaires tapent, pas
+`localhost`. Il faut que leurs téléphones soient sur le même réseau, et que ton
+ordinateur reste allumé pendant la partie. Aucune connexion internet n'est
+nécessaire : les polices sont dans le dépôt.
+
+### 2. Sur Render (une URL publique)
+
+Le dépôt contient un `render.yaml` : sur Render, *New → Blueprint*, pointe ton
+dépôt, et renseigne `ADMIN_PASSWORD` quand il te le demande.
+
+⚠️ Le blueprint demande le plan **starter**, payant. Ce n'est pas de la
+gourmandise : la partie vit dans un fichier SQLite, et seul un plan payant donne
+droit à un disque persistant. Sur le plan gratuit, le service s'endort au bout
+d'un quart d'heure sans visite et **repart de zéro** — comptes, secrets et
+points effacés au milieu de la formation. Si tu veux quand même essayer en
+gratuit, remplace `plan: starter` par `plan: free` et retire le bloc `disk`, en
+sachant que la partie ne survivra pas à une nuit.
+
+### 3. Ailleurs
+
+Un `Dockerfile` est fourni pour Fly.io, Railway ou un VPS. Une seule règle :
+**monter un volume persistant sur `/data`**, sinon la partie disparaît au
+redémarrage.
+
+### Réglages utiles
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `PORT` | `3000` | Port d'écoute |
+| `ADMIN_PASSWORD` | `bafa2026` | Mot de passe animateur, **au tout premier démarrage seulement** |
+| `GAME_NAME` | `Secret BAFA` | Nom affiché, idem premier démarrage |
+| `DATA_DIR` | `./data` | Dossier de la base SQLite |
+| `SECURE_COOKIES` | — | Mettre à `1` dès que le site est en HTTPS |
 
 ## Structure
 
@@ -87,10 +103,12 @@ server/
   auth.js      hachage des mots de passe (scrypt) et sessions par cookie signé
   game.js      règles du jeu : phases, votes, scores, clôture de journée
 public/
-  index.html   accueil, inscription et connexion
-  jeu.html     l'app des stagiaires (mon secret, voter, secrets, résultats, classement)
-  animateur.html   pilotage de la partie, modération, réglages
+  index.html   toute l'interface, en une seule page
+  css/app.css  la charte : ciel en dégradé, cartes flottantes, boutons en pilules
+  css/fonts.css + fonts/   Poppins hébergée en local, pour tenir sans internet
+  js/app.js    affichage et appels à l'API
 test/e2e.js    partie complète simulée contre l'API
+artifact/      le même jeu en une page publiée sur claude.ai (voir artifact/README.md)
 legacy/        le prototype statique d'origine (localStorage), conservé pour mémoire
 ```
 
