@@ -52,46 +52,62 @@ journées de vote, reveals, barème, fin de partie, remise à zéro) contre une 
 
 ## Mettre le jeu en ligne
 
-Trois chemins, du plus simple au plus solide.
+La partie est stockée dans une base **libSQL** — c'est-à-dire du SQLite, mais
+hébergé. Le serveur n'a donc aucun fichier à conserver, ce qui lui permet de
+tourner sur une offre d'hébergement gratuite sans rien perdre au redémarrage.
 
-### 1. Sur un ordinateur de la salle (gratuit, sans internet)
+En local, aucune configuration : sans `DATABASE_URL`, le jeu écrit dans
+`data/secret-bafa.db` comme n'importe quel fichier.
 
-Le plus adapté à une formation : le jeu tourne sur ton portable (`npm start`,
-comme ci-dessus) et les stagiaires s'y connectent par le Wi-Fi de la salle.
+### 1. Créer la base (gratuit)
 
-Le serveur affiche au démarrage les adresses à donner, du genre
-`http://192.168.1.42:3000` — c'est celle-là que les stagiaires tapent, pas
-`localhost`. Il faut que leurs téléphones soient sur le même réseau, et que ton
-ordinateur reste allumé pendant la partie. Aucune connexion internet n'est
-nécessaire : les polices sont dans le dépôt.
+Sur [Turso](https://turso.tech) : crée un compte, crée une base, et récupère
+les deux valeurs qu'il te donne — l'URL (`libsql://…`) et un jeton
+d'authentification. Vérifie au passage les conditions de l'offre gratuite du
+moment ; elle couvre très largement un jeu de cette taille (quelques centaines
+de lignes pour une formation entière).
 
-### 2. Sur Render (une URL publique)
+Rien d'autre à faire : le serveur crée ses tables tout seul au premier
+démarrage.
 
-Le dépôt contient un `render.yaml` : sur Render, *New → Blueprint*, pointe ton
-dépôt, et renseigne `ADMIN_PASSWORD` quand il te le demande.
+### 2. Déployer le serveur (gratuit)
 
-⚠️ Le blueprint demande le plan **starter**, payant. Ce n'est pas de la
-gourmandise : la partie vit dans un fichier SQLite, et seul un plan payant donne
-droit à un disque persistant. Sur le plan gratuit, le service s'endort au bout
-d'un quart d'heure sans visite et **repart de zéro** — comptes, secrets et
-points effacés au milieu de la formation. Si tu veux quand même essayer en
-gratuit, remplace `plan: starter` par `plan: free` et retire le bloc `disk`, en
-sachant que la partie ne survivra pas à une nuit.
+Le dépôt contient un `render.yaml`. Sur [Render](https://render.com) :
+*New → Blueprint*, pointe ce dépôt, et renseigne les trois valeurs demandées :
 
-### 3. Ailleurs
+| Variable | Ce que tu mets |
+|---|---|
+| `DATABASE_URL` | l'URL `libsql://…` de ta base Turso |
+| `DATABASE_AUTH_TOKEN` | le jeton fourni par Turso |
+| `ADMIN_PASSWORD` | le mot de passe animateur que tu veux |
 
-Un `Dockerfile` est fourni pour Fly.io, Railway ou un VPS. Une seule règle :
-**monter un volume persistant sur `/data`**, sinon la partie disparaît au
-redémarrage.
+Contrepartie du plan gratuit : après un quart d'heure sans visite, Render
+endort le service, et la personne suivante attend une trentaine de secondes le
+temps du réveil. Rien n'est perdu — tout est dans la base. Si ce délai te gêne
+le jour J, ouvre l'app quelques minutes avant la séance.
 
-### Réglages utiles
+### 3. Autres hébergeurs
+
+Un `Dockerfile` est fourni pour Fly.io, Railway ou un VPS. Avec `DATABASE_URL`,
+le conteneur est jetable et n'a besoin d'aucun volume.
+
+### 4. Sans internet, sur un ordinateur de la salle
+
+Le jeu tourne aussi très bien sur ton portable (`npm start`), les stagiaires s'y
+connectant par le Wi-Fi de la salle. Le serveur affiche au démarrage les
+adresses à donner, du genre `http://192.168.1.42:3000` — c'est celle-là que les
+stagiaires tapent, pas `localhost`. Aucune connexion internet n'est nécessaire :
+la base est un fichier local et les polices sont dans le dépôt.
+
+### Réglages
 
 | Variable | Défaut | Rôle |
 |---|---|---|
 | `PORT` | `3000` | Port d'écoute |
-| `ADMIN_PASSWORD` | `bafa2026` | Mot de passe animateur, **au tout premier démarrage seulement** |
+| `DATABASE_URL` | `file:./data/secret-bafa.db` | Base libSQL, ou fichier local |
+| `DATABASE_AUTH_TOKEN` | — | Jeton, pour une base hébergée |
+| `ADMIN_PASSWORD` | `bafa2026` | Mot de passe animateur, **au premier démarrage seulement** |
 | `GAME_NAME` | `Secret BAFA` | Nom affiché, idem premier démarrage |
-| `DATA_DIR` | `./data` | Dossier de la base SQLite |
 | `SECURE_COOKIES` | — | Mettre à `1` dès que le site est en HTTPS |
 
 ## Structure
@@ -99,7 +115,7 @@ redémarrage.
 ```
 server/
   index.js     routes HTTP (API JSON) et service des fichiers statiques
-  db.js        schéma SQLite et réglages
+  db.js        base libSQL (fichier local ou base hébergée), schéma et réglages
   auth.js      hachage des mots de passe (scrypt) et sessions par cookie signé
   game.js      règles du jeu : phases, votes, scores, clôture de journée
 public/

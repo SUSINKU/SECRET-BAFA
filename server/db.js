@@ -3,18 +3,39 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const Database = require('better-sqlite3');
+const { createClient } = require('@libsql/client');
+
+/**
+ * Couche base de données.
+ *
+ * libSQL, c'est du SQLite : le même SQL marche sur un fichier local en
+ * développement et sur une base hébergée en production. C'est ce qui permet
+ * de tourner sans disque persistant — donc sur une offre d'hébergement
+ * gratuite — sans réécrire une requête.
+ *
+ *   DATABASE_URL=file:./data/secret-bafa.db     (défaut, local)
+ *   DATABASE_URL=libsql://xxx.turso.io          + DATABASE_AUTH_TOKEN
+ */
 
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
-const DB_FILE = process.env.DB_FILE || path.join(DATA_DIR, 'secret-bafa.db');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+function resolveUrl() {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+  if (process.env.DB_FILE) return 'file:' + process.env.DB_FILE;
+  return 'file:' + path.join(DATA_DIR, 'secret-bafa.db');
+}
 
-const db = new Database(DB_FILE);
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+const URL = resolveUrl();
+if (URL.startsWith('file:')) {
+  fs.mkdirSync(path.dirname(URL.slice('file:'.length)), { recursive: true });
+}
 
-db.exec(`
+const client = createClient({
+  url: URL,
+  authToken: process.env.DATABASE_AUTH_TOKEN || undefined,
+});
+
+const SCHEMA = `
 CREATE TABLE IF NOT EXISTS players (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   name          TEXT NOT NULL,
@@ -26,7 +47,7 @@ CREATE TABLE IF NOT EXISTS players (
 
 CREATE TABLE IF NOT EXISTS secrets (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  player_id  INTEGER NOT NULL UNIQUE REFERENCES players(id) ON DELETE CASCADE,
+  player_id  INTEGER NOT NULL UNIQUE REFERENCES players(id),
   text       TEXT NOT NULL,
   code       TEXT NOT NULL UNIQUE,
   sort_key   TEXT NOT NULL,
@@ -44,10 +65,10 @@ CREATE TABLE IF NOT EXISTS rounds (
 
 CREATE TABLE IF NOT EXISTS votes (
   id                INTEGER PRIMARY KEY AUTOINCREMENT,
-  day               INTEGER NOT NULL REFERENCES rounds(day) ON DELETE CASCADE,
-  voter_id          INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  secret_id         INTEGER NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
-  guessed_player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  day               INTEGER NOT NULL,
+  voter_id          INTEGER NOT NULL REFERENCES players(id),
+  secret_id         INTEGER NOT NULL REFERENCES secrets(id),
+  guessed_player_id INTEGER NOT NULL REFERENCES players(id),
   created_at        TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE (day, voter_id)
 );
@@ -56,29 +77,61 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
-`);
+`;
 
-const readSetting = db.prepare('SELECT value FROM settings WHERE key = ?');
-const writeSetting = db.prepare(
-  'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-);
+/* ------------------------------------------------------------- requêtes */
 
-function getSetting(key, fallback = null) {
-  const row = readSetting.get(key);
+/** Les lignes libSQL sont des objets à clés nommées ; on les aplatit pour
+ *  pouvoir les sérialiser et les comparer sans surprise. */
+function plain(row) {
+  return row === undefined ? undefined : Object.assign({}, row);
+}
+
+async function all(sql, args = []) {
+  const result = await client.execute({ sql, args });
+  return result.rows.map(plain);
+}
+
+async function get(sql, args = []) {
+  const rows = await all(sql, args);
+  return rows.length ? rows[0] : undefined;
+}
+
+async function run(sql, args = []) {
+  return client.execute({ sql, args });
+}
+
+/** Plusieurs écritures qui doivent réussir ou échouer ensemble. */
+async function batch(statements) {
+  const useful = statements.filter(Boolean);
+  if (!useful.length) return [];
+  return client.batch(useful);
+}
+
+/* ------------------------------------------------------------- réglages */
+
+async function getSetting(key, fallback = null) {
+  const row = await get('SELECT value FROM settings WHERE key = ?', [key]);
   return row ? row.value : fallback;
 }
 
-function setSetting(key, value) {
-  writeSetting.run(key, String(value));
+async function setSetting(key, value) {
+  await run(
+    'INSERT INTO settings (key, value) VALUES (?, ?) ' +
+      'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+    [key, String(value)]
+  );
 }
 
-function getNumber(key, fallback) {
-  const value = Number(getSetting(key));
+async function getNumber(key, fallback) {
+  const value = Number(await getSetting(key));
   return Number.isFinite(value) ? value : fallback;
 }
 
-/** Valeurs par défaut posées au tout premier démarrage uniquement. */
-function seedDefaults(hashPassword) {
+/** Crée le schéma, puis pose les valeurs par défaut au tout premier démarrage. */
+async function init(hashPassword) {
+  await client.executeMultiple(SCHEMA);
+
   const defaults = {
     game_name: process.env.GAME_NAME || 'Secret BAFA',
     phase: 'lobby', // lobby -> jeu -> fini
@@ -88,8 +141,8 @@ function seedDefaults(hashPassword) {
     admin_password_hash: hashPassword(process.env.ADMIN_PASSWORD || 'bafa2026'),
   };
   for (const [key, value] of Object.entries(defaults)) {
-    if (getSetting(key) === null) setSetting(key, value);
+    if ((await getSetting(key)) === null) await setSetting(key, value);
   }
 }
 
-module.exports = { db, getSetting, setSetting, getNumber, seedDefaults, DB_FILE };
+module.exports = { client, all, get, run, batch, getSetting, setSetting, getNumber, init, URL };

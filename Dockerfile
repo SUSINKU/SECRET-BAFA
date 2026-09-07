@@ -15,7 +15,11 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV DATA_DIR=/data
 
-# Monte un volume sur /data, sinon la partie disparaît au redémarrage.
+# Deux façons de stocker la partie :
+#  - une base libSQL hébergée, via DATABASE_URL et DATABASE_AUTH_TOKEN
+#    (recommandé : le conteneur devient jetable) ;
+#  - un fichier local, et il faut alors monter un volume sur /data,
+#    sinon la partie disparaît au redémarrage.
 VOLUME ["/data"]
 EXPOSE 3000
 

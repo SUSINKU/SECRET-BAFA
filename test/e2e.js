@@ -414,6 +414,7 @@ check('remise à zéro complète', async () => {
 /* ------------------------------------------------------------------- run */
 
 (async () => {
+  await app.ready;                      // schéma créé avant le premier appel
   const server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;

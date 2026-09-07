@@ -1,14 +1,17 @@
 # Déploiement sur Render (https://render.com) — « Blueprint ».
 #
-# Le plan « starter » est payant (quelques euros par mois) mais c'est le premier
-# qui autorise un disque persistant, et la partie vit dans un fichier SQLite :
-# sur le plan gratuit, le service s'endort et redémarre, et la partie repart de
-# zéro au milieu de la formation. Voir le README pour les autres options.
+# La partie ne vit plus dans un fichier : elle est dans une base libSQL hébergée
+# (Turso). Le serveur n'a donc besoin d'aucun disque persistant, et l'offre
+# gratuite de Render suffit. Voir le README pour créer la base.
+#
+# Seule contrepartie du plan gratuit : au bout d'un quart d'heure sans visite,
+# Render endort le service. La personne suivante attend une trentaine de
+# secondes le temps du réveil — mais rien n'est perdu, tout est dans la base.
 services:
   - type: web
     name: secret-bafa
     runtime: node
-    plan: starter
+    plan: free
     region: frankfurt
     buildCommand: npm ci
     startCommand: npm start
@@ -16,13 +19,13 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      - key: DATA_DIR
-        value: /var/data
       - key: SECURE_COOKIES
         value: "1"
+      # Les trois valeurs ci-dessous se saisissent dans l'interface de Render,
+      # elles n'ont rien à faire dans le dépôt.
+      - key: DATABASE_URL
+        sync: false        # libsql://<ta-base>.turso.io
+      - key: DATABASE_AUTH_TOKEN
+        sync: false        # le jeton fourni par Turso
       - key: ADMIN_PASSWORD
-        sync: false   # à saisir dans l'interface Render : c'est ton mot de passe animateur
-    disk:
-      name: secret-bafa-data
-      mountPath: /var/data
-      sizeGB: 1
+        sync: false        # ton mot de passe animateur
