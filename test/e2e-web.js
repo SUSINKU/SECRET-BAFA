@@ -152,13 +152,34 @@ async function signIn(page, name, mode) {
     await page.click(`button.secret:has(.code:text-is("Secret ${codeByName[secretOwner]}"))`);
     await page.selectOption('select', { label: accused });
     await page.click('button:text("Valider mon vote")');
-    await page.waitForSelector('.secret.flat .who', { timeout: 20000 });
+    // on attend la confirmation du serveur, pas l'affichage optimiste :
+    // fermer l'onglet avant l'accusé de réception perdrait le vote.
+    await page.waitForSelector('#voteDone', { timeout: 20000 });
     if (voter !== 'Alice' && voter !== 'Bruno') await page.close();
   }
   console.log('  ✓ quatre votes enregistrés');
 
-  /* ── 6. le reveal ─────────────────────────────────────────────────── */
+  /* ── 5 bis. l'animateur doit voir les quatre votes AVANT de clôturer ── */
   await signIn(alice, 'Alice', 'login');
+  const seen = await alice.evaluate(async (password) => {
+    const fb = await import('/js/firebase.js');
+    const { firebaseConfig, ACCOUNT_DOMAIN } = await import('/js/config.js');
+    const app = fb.initializeApp(firebaseConfig, 'anim-' + Date.now());
+    const auth = fb.getAuth(app);
+    const db = fb.getFirestore(app);
+    if (firebaseConfig.useEmulators) {
+      fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+      fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
+    }
+    await fb.signInWithEmailAndPassword(auth, 'alice@' + ACCOUNT_DOMAIN, password);
+    const snap = await fb.getDocs(fb.collection(db, 'votes'));
+    return snap.docs.map((d) => d.id);
+  }, PASSWORD);
+  assert.strictEqual(seen.length, 4,
+    "l'animateur doit voir les 4 votes en base, or il en voit " + seen.length + ' : ' + JSON.stringify(seen));
+  console.log('  ✓ les quatre votes sont bien en base');
+
+  /* ── 6. le reveal ─────────────────────────────────────────────────── */
   await tab(alice, 'Animateur');
   await alice.click('button:text("Clôturer & révéler")');
   await alice.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
@@ -166,7 +187,9 @@ async function signIn(page, name, mode) {
   await tab(alice, 'Résultats');
   await alice.waitForSelector('.vote', { timeout: 20000 });
   const verdicts = await alice.$$eval('.vote', (rows) => rows.map((r) => r.textContent));
-  assert.strictEqual(verdicts.length, 4, 'les quatre votes doivent être publiés');
+  assert.strictEqual(verdicts.length, 4,
+    'les quatre votes doivent être publiés, or on en voit ' + verdicts.length + ' : ' +
+    JSON.stringify(verdicts.map((v) => v.slice(0, 90))));
   assert.strictEqual(verdicts.filter((v) => v.includes('Trouvé !')).length, 2, 'deux personnes ont trouvé');
 
   // Le point clé du jeu : un vote raté ne nomme jamais un auteur encore en lice.

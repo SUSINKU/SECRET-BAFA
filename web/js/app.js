@@ -78,6 +78,7 @@ const S = {
   secrets: new Map(),   // id  -> {id, text, code, sortKey, solvedDay, authorUid, authorName}
   mySecretId: null,
   myVotes: new Map(),   // jour -> {secretId, guess}
+  votePending: false,   // vote écrit localement mais pas encore confirmé
   scores: [],
   authorOf: new Map(),  // animateur : secretId -> uid
   allVotes: [],         // animateur : tous les votes
@@ -108,20 +109,41 @@ function configured() {
   return firebaseConfig && !String(firebaseConfig.projectId || '').startsWith('À_REMPLIR');
 }
 
-function bootError(title, detail) {
-  clear($('screen'));
+/** Écran d'installation : ce que voit l'animateur avant d'avoir branché Firebase. */
+function renderSetup() {
+  $('statusLine').textContent = 'Installation';
+  $('heroTitle').textContent = 'Presque prêt';
+  $('heroSub').textContent = 'Il reste à brancher le jeu sur ta base Firebase.';
+  clear($('heroStats'));
+
+  const screen = clear($('screen'));
   const card = el('div', 'card');
-  card.appendChild(el('h2', null, title));
-  card.appendChild(el('p', 'muted', detail));
-  $('screen').appendChild(card);
-  $('statusLine').textContent = 'Hors service';
+  card.appendChild(el('h2', null, 'Cinq étapes, une dizaine de minutes'));
+  card.appendChild(el('p', 'muted',
+    "Cette page est le jeu, complet. Il lui manque seulement les identifiants du projet Firebase qui stockera la partie."));
+
+  const steps = el('ol');
+  [
+    ['Créer le projet', 'Sur console.firebase.google.com — tu peux refuser Google Analytics.'],
+    ['Activer la connexion', 'Authentication → Get started → active « Adresse e-mail/Mot de passe ».'],
+    ['Créer la base', 'Firestore Database → Créer une base de données → un emplacement en Europe, en mode production.'],
+    ['Coller les règles', 'Firestore Database → Règles : remplace tout par le fichier firestore.rules du dépôt, puis Publier. Sans cette étape, tous les secrets seraient lisibles par tout le monde.'],
+    ['Recopier la configuration', "⚙ Paramètres du projet → Vos applications → Web : copie le bloc « const firebaseConfig = { … } » et remplace celui du fichier web/js/config.js."],
+  ].forEach(([title, detail]) => {
+    const item = el('li');
+    item.appendChild(el('strong', null, title));
+    item.appendChild(el('div', 'muted', detail));
+    item.style.marginBottom = '12px';
+    steps.appendChild(item);
+  });
+  card.appendChild(steps);
+  card.appendChild(el('p', 'muted',
+    "Une fois le fichier enregistré, recharge cette page : le jeu démarre. Pense ensuite à ajouter l'adresse de cette page dans Firebase → Authentication → Settings → Domaines autorisés."));
+  screen.appendChild(card);
 }
 
 async function boot() {
-  if (!configured()) {
-    return bootError('Configuration manquante',
-      "Le fichier web/js/config.js n'a pas encore été rempli avec les identifiants du projet Firebase. Le README explique où les trouver.");
-  }
+  if (!configured()) return renderSetup();
   const app = initializeApp(firebaseConfig);
   auth = getAuth(app);
   db = getFirestore(app);
@@ -198,14 +220,23 @@ async function afterSignIn() {
     render();
   }, onDbError));
 
-  watch(onSnapshot(query(collection(db, 'votes'), where('voter', '==', uid)), (snap) => {
-    S.myVotes = new Map();
-    for (const d of snap.docs) {
-      const data = d.data();
-      S.myVotes.set(data.day, { secretId: data.secretId, guess: data.guess });
-    }
-    render();
-  }, onDbError));
+  // includeMetadataChanges : on veut savoir quand le vote passe de « écrit
+  // localement » à « confirmé par le serveur ». C'est la différence entre un
+  // vote affiché et un vote qui compte vraiment.
+  watch(onSnapshot(
+    query(collection(db, 'votes'), where('voter', '==', uid)),
+    { includeMetadataChanges: true },
+    (snap) => {
+      S.myVotes = new Map();
+      for (const d of snap.docs) {
+        const data = d.data();
+        S.myVotes.set(data.day, { secretId: data.secretId, guess: data.guess });
+      }
+      S.votePending = snap.metadata.hasPendingWrites;
+      render();
+    },
+    onDbError
+  ));
 
   if (S.isAdmin) watchAdmin();
   render(true);
@@ -311,19 +342,37 @@ async function startGame() {
   await updateDoc(doc(db, 'game', 'state'), { phase: 'jeu', day: 1, roundStatus: 'open' });
 }
 
-/** Le calcul des points et la publication du reveal : le seul moment où
- *  l'information cachée devient publique, et c'est l'animateur qui la publie. */
-function computeScores() {
+/**
+ * Relit les votes et les liens d'auteur directement dans la base.
+ *
+ * On ne se fie pas à l'instantané local : si l'animateur clôture la journée
+ * juste après avoir ouvert sa page, les derniers votes ne lui sont peut-être
+ * pas encore parvenus, et le reveal publierait des résultats incomplets.
+ */
+async function freshAdminData() {
+  const [voteSnap, authorSnap] = await Promise.all([
+    getDocs(collection(db, 'votes')),
+    getDocs(collection(db, 'authorOf')),
+  ]);
+  return {
+    votes: voteSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+    authorOf: new Map(authorSnap.docs.map((d) => [d.id, d.data().uid])),
+  };
+}
+
+/** Le calcul des points : le seul moment où l'information cachée sert à
+ *  produire quelque chose de public, et c'est l'animateur qui le publie. */
+function computeScores(allVotes, authorOf) {
   const g = game();
   const closedDays = new Set(
-    S.allVotes.map((v) => v.day).filter((d) => d < g.day || g.roundStatus === 'closed')
+    allVotes.map((v) => v.day).filter((d) => d < g.day || g.roundStatus === 'closed')
   );
   const rows = new Map(
     [...S.players.values()].map((p) => [p.uid, { uid: p.uid, name: p.name, found: 0, fooled: 0, points: 0 }])
   );
-  for (const vote of S.allVotes) {
+  for (const vote of allVotes) {
     if (!closedDays.has(vote.day)) continue;
-    const author = S.authorOf.get(vote.secretId);
+    const author = authorOf.get(vote.secretId);
     if (!author) continue;
     if (vote.guess === author) {
       const voter = rows.get(vote.voter);
@@ -341,12 +390,13 @@ function computeScores() {
 async function closeDay() {
   const g = game();
   if (g.roundStatus !== 'open') throw new Error('Aucune journée ouverte.');
-  const dayVotes = S.allVotes.filter((v) => v.day === g.day);
+  const { votes: allVotes, authorOf } = await freshAdminData();
+  const dayVotes = allVotes.filter((v) => v.day === g.day);
 
   // Les secrets devinés juste par au moins une personne sortent du jeu.
   const found = new Set();
   for (const vote of dayVotes) {
-    const author = S.authorOf.get(vote.secretId);
+    const author = authorOf.get(vote.secretId);
     const secret = S.secrets.get(vote.secretId);
     if (secret && secret.solvedDay == null && author && vote.guess === author) found.add(vote.secretId);
   }
@@ -354,7 +404,7 @@ async function closeDay() {
   const nameOf = (uid) => (S.players.get(uid) ? S.players.get(uid).name : '?');
   const batch = writeBatch(db);
   for (const secretId of found) {
-    const author = S.authorOf.get(secretId);
+    const author = authorOf.get(secretId);
     batch.update(doc(db, 'secrets', secretId),
       { solvedDay: g.day, authorUid: author, authorName: nameOf(author) });
   }
@@ -364,7 +414,7 @@ async function closeDay() {
   // toutes, avant que quoi que ce soit ne devienne lisible.
   const publicVotes = dayVotes.map((vote) => {
     const secret = S.secrets.get(vote.secretId);
-    const author = S.authorOf.get(vote.secretId);
+    const author = authorOf.get(vote.secretId);
     const correct = author && vote.guess === author;
     const nowPublic = correct || found.has(vote.secretId) ||
       (secret && secret.solvedDay != null);
@@ -380,7 +430,7 @@ async function closeDay() {
 
   const solvedList = [...found].map((secretId) => {
     const secret = S.secrets.get(secretId);
-    return { code: secret.code, text: secret.text, authorName: nameOf(S.authorOf.get(secretId)) };
+    return { code: secret.code, text: secret.text, authorName: nameOf(authorOf.get(secretId)) };
   });
 
   batch.set(doc(db, 'results', String(g.day)), { day: g.day, votes: publicVotes, solved: solvedList });
@@ -390,7 +440,7 @@ async function closeDay() {
     { roundStatus: 'closed', phase: remaining.length === 0 ? 'fini' : 'jeu' });
   await batch.commit();
 
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(), day: g.day });
+  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: g.day });
 }
 
 async function openNextDay() {
@@ -402,21 +452,23 @@ async function openNextDay() {
 
 async function endGame() {
   if (game().roundStatus === 'open') await closeDay();
+  const { votes: allVotes, authorOf } = await freshAdminData();
   const nameOf = (uid) => (S.players.get(uid) ? S.players.get(uid).name : '?');
   const batch = writeBatch(db);
   for (const secret of S.secrets.values()) {
     if (secret.authorUid) continue;
-    const author = S.authorOf.get(secret.id);
+    const author = authorOf.get(secret.id);
     if (author) batch.update(doc(db, 'secrets', secret.id), { authorUid: author, authorName: nameOf(author) });
   }
   batch.update(doc(db, 'game', 'state'), { phase: 'fini' });
   await batch.commit();
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(), day: game().day });
+  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: game().day });
 }
 
 async function saveSettings(patch) {
   await updateDoc(doc(db, 'game', 'state'), patch);
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(), day: game().day });
+  const { votes: allVotes, authorOf } = await freshAdminData();
+  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: game().day });
 }
 
 async function removePlayer(uid) {
@@ -763,7 +815,15 @@ function renderVote(screen) {
     box.appendChild(el('span', 'txt', secret ? secret.text : ''));
     box.appendChild(el('span', 'who', 'Ta réponse : ' + (who ? who.name : '?')));
     card.appendChild(box);
-    card.appendChild(el('p', 'muted', 'Un seul vote par jour, impossible de le changer.'));
+    if (S.votePending) {
+      card.appendChild(el('p', 'muted', 'Envoi en cours… garde la page ouverte un instant.'));
+    } else {
+      const done = el('p');
+      done.appendChild(el('span', 'pill', 'Vote enregistré'));
+      done.id = 'voteDone';
+      card.appendChild(done);
+      card.appendChild(el('p', 'muted', 'Un seul vote par jour, impossible de le changer.'));
+    }
     return screen.appendChild(card);
   }
 
