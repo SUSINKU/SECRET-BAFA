@@ -1,0 +1,26 @@
+{
+  "name": "secret-bafa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Secret BAFA — le jeu des secrets des formations BAFA, en ligne (Firebase)",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "build": "esbuild build/firebase-entry.js --bundle --format=esm --minify --target=es2020 --outfile=web/js/firebase.js --legal-comments=none",
+    "test": "npm run test:rules && npm run test:web",
+    "test:rules": "firebase emulators:exec --only firestore --project secret-bafa-test \"node test/rules.test.js\"",
+    "test:web": "firebase emulators:exec --only auth,firestore,hosting --project secret-bafa-test \"node test/e2e-web.js\"",
+    "serve": "firebase emulators:start --only auth,firestore,hosting --project secret-bafa-test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "firebase": "^12.18.0"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.2",
+    "esbuild": "^0.28.2",
+    "firebase-tools": "^15.29.0"
+  }
+}

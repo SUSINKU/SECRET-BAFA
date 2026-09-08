@@ -1,0 +1,13 @@
+node_modules/
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+.env
+.DS_Store
+
+# propre à chaque personne : voir .firebaserc.example
+.firebaserc
+firestore-debug.log
+firebase-debug.log
+web/js/config.local.js
