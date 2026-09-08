@@ -1,0 +1,23 @@
+# Réglages de publication pour Netlify.
+# Le jeu est une page statique : rien à compiler, on sert simplement web/.
+[build]
+  publish = "web"
+  command = ""
+
+# Une seule page, donc toute adresse inconnue retombe dessus.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+[[headers]]
+  for = "/*.woff2"
+  [headers.values]
+    Cache-Control = "public, max-age=604800"
+
+# Le SDK Firebase et le logo changent rarement, la page jamais en cache
+# pour que les stagiaires aient toujours la dernière version.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache"
