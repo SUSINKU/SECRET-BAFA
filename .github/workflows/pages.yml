@@ -26,6 +26,24 @@ jobs:
       url: ${{ steps.deploiement.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+
+      # ── Marquer la version des fichiers ───────────────────────────────
+      # GitHub Pages demande aux navigateurs de garder les fichiers dix
+      # minutes en mémoire. Sans repère de version, quelqu'un qui a la page
+      # ouverte continue de faire tourner l'ancien code après une mise à
+      # jour — et croit que rien n'a changé. En accrochant l'empreinte du
+      # commit à l'adresse des fichiers, chaque publication devient une
+      # adresse neuve : le navigateur va forcément la rechercher.
+      - name: Marquer la version des fichiers
+        run: |
+          v="${GITHUB_SHA::8}"
+          sed -i "s|href=\"css/app.css\"|href=\"css/app.css?v=$v\"|" web/index.html
+          sed -i "s|src=\"js/app.js\"|src=\"js/app.js?v=$v\"|" web/index.html
+          sed -i "s|from './firebase.js'|from './firebase.js?v=$v'|" web/js/app.js
+          sed -i "s|from './config.js'|from './config.js?v=$v'|" web/js/app.js
+          echo "Version publiée : $v"
+          grep -n "app.css?v=\|app.js?v=" web/index.html
+
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

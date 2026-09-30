@@ -68,6 +68,12 @@ aucun droit. Ce sont les règles de sécurité qui protègent les données.
 [`pages.yml`](.github/workflows/pages.yml) publie le dossier `web/` à chaque
 modification de la branche `main`, et affiche l'adresse obtenue.
 
+À chaque publication, il accroche l'empreinte du commit à l'adresse de la
+feuille de style et du script (`app.js?v=af8201f2`). Sans ça, GitHub Pages
+demande aux navigateurs de garder ces fichiers dix minutes : quelqu'un qui a
+la page ouverte continuerait de faire tourner l'ancien code après une mise à
+jour, et croirait que rien n'a changé.
+
 Retourne ensuite dans Firebase : **Authentication → Settings → Domaines
 autorisés** → ajoute le domaine de ta page (`ton-nom.github.io`), sinon la
 connexion sera refusée.
@@ -78,7 +84,7 @@ Le rôle d'animateur **ne se réclame pas depuis l'application**. S'il suffisait
 de cliquer, le premier stagiaire curieux verrait tous les secrets. Il s'inscrit
 une fois dans la console Firebase, qui n'appartient qu'à toi.
 
-1. Ouvre l'application, crée ton compte, va dans l'onglet **Animateur** :
+1. Ouvre l'application, crée ton compte, va dans l'onglet **Admin** :
    la page affiche **ton identifiant**, avec un bouton *Copier*.
 2. Console Firebase → **Firestore Database → Données** → *Démarrer une
    collection*, nommée exactement **`admins`**.
@@ -88,14 +94,15 @@ une fois dans la console Firebase, qui n'appartient qu'à toi.
    sans rechargement.
 
 Ensuite, tu peux **nommer un second animateur directement depuis la page**
-(onglet *Animateur → Participants →* fiche de la personne), et lui retirer ce
+(onglet *Admin → Participants →* fiche de la personne), et lui retirer ce
 droit. Tu ne peux pas te le retirer à toi-même : c'est ce qui garantit qu'une
 partie ne se retrouve jamais sans personne aux commandes.
 
-## L'espace animateur
+## L'espace admin
 
 Quatre volets, tous pensés pour être lus d'un téléphone, debout, entre deux
-ateliers.
+ateliers. L'onglet s'appelle **Admin** — c'est le lieu ; « animateur » désigne
+la personne qui en a les clés.
 
 - **Pilotage** — l'état de la partie, les actions (lancer, clôturer, ouvrir la
   journée suivante, terminer), **qui n'a pas encore voté, nommément**, et **les

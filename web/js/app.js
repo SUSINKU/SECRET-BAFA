@@ -102,7 +102,7 @@ const mySecret = () => (S.mySecretId ? S.secrets.get(S.mySecretId) || null : nul
 
 const TABS = [
   ['secret', 'Mon secret'], ['vote', 'Voter'], ['secrets', 'Les secrets'],
-  ['results', 'Résultats'], ['ranking', 'Classement'], ['anim', 'Animateur'],
+  ['results', 'Résultats'], ['ranking', 'Classement'], ['anim', 'Admin'],
 ];
 
 /* ──────────────────────────────────────────────────── mise en route ──── */
@@ -1219,7 +1219,7 @@ function copyField(value, label) {
 /** Ce que voit quelqu'un qui n'est pas animateur : comment le devenir. */
 function renderAdminBootstrap(screen) {
   const card = el('div', 'card');
-  card.appendChild(el('h2', null, 'Espace animateur'));
+  card.appendChild(el('h2', null, 'Espace admin'));
 
   if (S.admins.size) {
     const names = [...S.admins].map((uid) => (S.players.get(uid) || {}).name).filter(Boolean);
