@@ -108,14 +108,24 @@ const BOUTON = {
   register: "Je m'inscris", login: 'Entrer dans la partie', admin: 'Entrer au pilotage',
 };
 
+/**
+ * Ouvre la page et s'assure d'y être connecté.
+ *
+ * `mode` vaut 'register' ou 'login' pour un stagiaire, 'admin' pour le compte
+ * de pilotage (dont l'identifiant est imposé par la page), et 'creerAdmin'
+ * pour la toute première création de ce compte.
+ */
 async function signIn(page, name, mode) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('nav.tabs:not(.hidden), input[autocomplete="username"]', { timeout: 20000 });
   if (await page.$('nav.tabs:not(.hidden)')) return;   // session déjà ouverte
-  await page.click(`button:text-is(${JSON.stringify(ONGLET[mode])})`);
-  await page.fill('input[autocomplete="username"]', name);
+  const creation = mode === 'creerAdmin';
+  await page.click(`button:text-is(${JSON.stringify(ONGLET[creation ? 'admin' : mode])})`);
+  if (!creation && mode !== 'admin') await page.fill('input[autocomplete="username"]', name);
   await page.fill('input[type="password"]', PASSWORD);
-  await page.click(`button:text-is(${JSON.stringify(BOUTON[mode])})`);
+  await page.click(creation
+    ? 'button:text-is("Première fois ? Créer le compte Admin")'
+    : `button:text-is(${JSON.stringify(BOUTON[mode])})`);
   await page.waitForSelector('nav.tabs:not(.hidden), #authMsg .msg', { timeout: 20000 });
   const failure = await page.$('#authMsg .msg');
   if (failure) throw new Error(name + ' : ' + (await failure.textContent()));
@@ -125,64 +135,82 @@ async function signIn(page, name, mode) {
   browser = await chromium.launch();
 
   /* ── 1. le rôle d'animateur ne se réclame pas ──────────────────────── */
-  const alice = await pageFor('Alice');
-  await signIn(alice, 'Alice', 'register');
-  await tab(alice, 'Admin');
-  await alice.waitForSelector('.copyline input', { timeout: 20000 });
+  const anim = await pageFor('Admin');
+  await signIn(anim, 'Admin', 'creerAdmin');
+  await tab(anim, 'Admin');
+  await anim.waitForSelector('.copyline input', { timeout: 20000 });
 
-  // Aucun bouton ne permet de s'emparer du rôle : c'est tout l'intérêt.
-  assert.strictEqual(await alice.locator('button:text-is("Devenir animateur")').count(), 0,
+  // Créer le compte ne donne rien : aucun bouton ne s'empare du rôle.
+  assert.strictEqual(await anim.locator('button:text-is("Devenir animateur")').count(), 0,
     "aucun bouton ne doit permettre de se nommer animateur soi-même");
+  assert.strictEqual(await anim.locator('button:text("Lancer la partie")').count(), 0,
+    "le compte Admin ne doit rien piloter tant que la console ne l'a pas nommé");
 
-  const aliceUid = await alice.inputValue('.copyline input');
-  assert.ok(aliceUid && aliceUid.length > 10, "la page doit afficher l'identifiant à recopier");
+  const animUid = await anim.inputValue('.copyline input');
+  assert.ok(animUid && animUid.length > 10, "la page doit afficher l'identifiant à recopier");
 
   // Le formateur le fait une fois dans la console Firebase…
-  await nameAdminFromConsole(aliceUid);
+  await nameAdminFromConsole(animUid);
   // …et la page bascule toute seule, sans rechargement : le temps réel sert
   // aussi à ça.
-  await alice.waitForSelector('button:text("Lancer la partie")', { timeout: 20000 });
+  await anim.waitForSelector('button:text("Lancer la partie")', { timeout: 20000 });
   console.log('  ✓ le rôle se donne depuis la console, et la page le voit sans recharger');
+
+  // « Admin » est réservé : un stagiaire ne peut pas s'en emparer.
+  const curieux = await pageFor('curieux');
+  await curieux.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await curieux.waitForSelector('input[autocomplete="username"]', { timeout: 20000 });
+  await curieux.click('button:text-is("Inscription")');
+  await curieux.fill('input[autocomplete="username"]', 'Admin');
+  await curieux.fill('input[type="password"]', PASSWORD);
+  await curieux.click('button:text-is("Je m\'inscris")');
+  await curieux.waitForSelector('#authMsg .msg', { timeout: 20000 });
+  const refus = await curieux.textContent('#authMsg .msg');
+  assert.ok(refus.includes('réservé'), "« Admin » doit être refusé à l'inscription, or : " + refus);
+  await curieux.close();
+  console.log('  ✓ l\'identifiant Admin est réservé');
 
   /* ── 2. tout le monde s'inscrit et dépose son secret ───────────────── */
   for (const [name, secret] of PLAYERS) {
-    const page = name === 'Alice' ? alice : await pageFor(name);
-    if (name !== 'Alice') await signIn(page, name, 'register');
-    else { await tab(page, 'Mon secret'); }
+    const page = await pageFor(name);
+    await signIn(page, name, 'register');
     await page.fill('textarea', secret);
     await page.click('button:text("Déposer mon secret")');
     await page.waitForSelector('#secretMsg .msg.ok', { timeout: 20000 });
-    if (name !== 'Alice') await page.close();
+    await page.close();
   }
 
   /* ── 3. l'animateur voit qui a écrit quoi, et lance ────────────────── */
-  await tab(alice, 'Admin');
-  await alice.click('.segments button:text-is("Participants")');
-  await alice.waitForSelector('.sheet', { timeout: 20000 });
-  const codeByName = Object.fromEntries(await alice.$$eval('.sheet', (boxes) =>
+  await tab(anim, 'Admin');
+  await anim.click('.segments button:text-is("Participants")');
+  await anim.waitForSelector('.sheet', { timeout: 20000 });
+  const codeByName = Object.fromEntries(await anim.$$eval('.sheet', (boxes) =>
     boxes.map((box) => {
       const who = box.querySelector('.sheet__name');
       const pill = box.querySelector('.sheet__badges .pill');
       return [who ? who.firstChild.textContent.trim() : '',
               pill ? pill.textContent.replace('Secret ', '') : ''];
     })));
-  assert.strictEqual(Object.keys(codeByName).length, 5, 'la vue animateur doit lister les 5 participants');
+  assert.strictEqual(Object.keys(codeByName).length, 5,
+    'la vue animateur doit lister les 5 stagiaires, et pas le compte de pilotage : ' +
+    JSON.stringify(Object.keys(codeByName)));
+  assert.ok(!('Admin' in codeByName), "le compte de pilotage ne doit pas figurer parmi les participants");
   for (const [name] of PLAYERS) {
     assert.ok(codeByName[name] && codeByName[name].length === 3,
       `l'animateur doit voir le secret de ${name}`);
   }
 
   // La fiche dépliée montre bien le texte du secret, en clair.
-  await alice.click('.sheet__head:has-text("Nour")');
-  await alice.waitForSelector('.sheet.open .sheet__body', { timeout: 20000 });
-  const fiche = await alice.textContent('.sheet.open .sheet__body');
+  await anim.click('.sheet__head:has-text("Nour")');
+  await anim.waitForSelector('.sheet.open .sheet__body', { timeout: 20000 });
+  const fiche = await anim.textContent('.sheet.open .sheet__body');
   assert.ok(fiche.includes('Prune'), "la fiche doit montrer le secret en clair : " + fiche.slice(0, 120));
-  await alice.click('.sheet.open .sheet__head');
+  await anim.click('.sheet.open .sheet__head');
   console.log('  ✓ une fiche par participant, secret en clair et historique');
 
-  await alice.click('.segments button:text-is("Pilotage")');
-  await alice.click('button:text("Lancer la partie")');
-  await alice.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
+  await anim.click('.segments button:text-is("Pilotage")');
+  await anim.click('button:text("Lancer la partie")');
+  await anim.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
 
   /* ── 4. un stagiaire ne peut pas lire ce qui est caché ─────────────── */
   const bruno = await pageFor('Bruno');
@@ -226,7 +254,7 @@ async function signIn(page, name, mode) {
     ['Nour', 'Alice', 'Diego'],
   ];
   for (const [voter, secretOwner, accused] of votes) {
-    const page = voter === 'Alice' ? alice : (voter === 'Bruno' ? bruno : await pageFor(voter));
+    const page = voter === 'Bruno' ? bruno : await pageFor(voter);
     await signIn(page, voter, 'login');
     await tab(page, 'Voter');
     await page.waitForSelector('button.secret', { timeout: 20000 });
@@ -236,23 +264,23 @@ async function signIn(page, name, mode) {
     // on attend la confirmation du serveur, pas l'affichage optimiste :
     // fermer l'onglet avant l'accusé de réception perdrait le vote.
     await page.waitForSelector('#voteDone', { timeout: 20000 });
-    if (voter !== 'Alice' && voter !== 'Bruno') await page.close();
+    if (voter !== 'Bruno') await page.close();
   }
   console.log('  ✓ quatre votes enregistrés');
 
   /* ── 5 bis. le poste de commande pendant la journée ────────────────── */
-  await signIn(alice, 'Alice', 'login');
-  await tab(alice, 'Admin');
-  await alice.click('.segments button:text-is("Pilotage")');
-  await alice.waitForSelector('.chips .chip', { timeout: 20000 });
+  // Le poste de commande, pendant que la journée est encore ouverte.
+  await tab(anim, 'Admin');
+  await anim.click('.segments button:text-is("Pilotage")');
+  await anim.waitForSelector('.chips .chip', { timeout: 20000 });
 
   // Qui relancer, nommément : seul Diego n'a pas voté.
-  const aRelancer = await alice.$$eval('.chips .chip', (els) => els.map((e) => e.textContent.trim()));
+  const aRelancer = await anim.$$eval('.chips .chip', (els) => els.map((e) => e.textContent.trim()));
   assert.deepStrictEqual(aRelancer, ['Diego'],
     "l'animateur doit voir nommément qui n'a pas voté, or : " + JSON.stringify(aRelancer));
 
   // Les votes en direct, avec la vérité en face, avant que quiconque ne les voie.
-  const enDirect = await alice.$$eval('.vote', (rows) => rows.map((r) => r.textContent.trim()));
+  const enDirect = await anim.$$eval('.vote', (rows) => rows.map((r) => r.textContent.trim()));
   assert.strictEqual(enDirect.length, 4,
     "l'animateur doit voir les 4 votes en direct, or " + enDirect.length);
   assert.strictEqual(enDirect.filter((v) => v.includes('Juste')).length, 2,
@@ -264,7 +292,7 @@ async function signIn(page, name, mode) {
   // Pendant ce temps, Bruno ne voit toujours rien de ces votes.
   const brunoVoit = await bruno.$$eval('.vote', (rows) => rows.length);
   assert.strictEqual(brunoVoit, 0, 'un stagiaire ne doit voir aucun vote avant le reveal');
-  const seen = await alice.evaluate(async (password) => {
+  const seen = await anim.evaluate(async (password) => {
     const fb = await import('/js/firebase.js');
     const { firebaseConfig, ACCOUNT_DOMAIN } = await import('/js/config.js');
     const app = fb.initializeApp(firebaseConfig, 'anim-' + Date.now());
@@ -272,7 +300,7 @@ async function signIn(page, name, mode) {
     const db = fb.getFirestore(app);
     fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
     fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    await fb.signInWithEmailAndPassword(auth, 'alice@' + ACCOUNT_DOMAIN, password);
+    await fb.signInWithEmailAndPassword(auth, 'admin@' + ACCOUNT_DOMAIN, password);
     const snap = await fb.getDocs(fb.collection(db, 'votes'));
     return snap.docs.map((d) => d.id);
   }, PASSWORD);
@@ -281,13 +309,15 @@ async function signIn(page, name, mode) {
   console.log('  ✓ les quatre votes sont bien en base');
 
   /* ── 6. le reveal ─────────────────────────────────────────────────── */
-  await tab(alice, 'Admin');
-  await alice.click('button:text("Clôturer & révéler")');
-  await alice.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
+  await tab(anim, 'Admin');
+  await anim.click('button:text("Clôturer & révéler")');
+  await anim.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
 
-  await tab(alice, 'Résultats');
-  await alice.waitForSelector('.vote', { timeout: 20000 });
-  const verdicts = await alice.$$eval('.vote', (rows) => rows.map((r) => r.textContent));
+  // Les résultats relus depuis la page d'un stagiaire : c'est ce que voit le
+  // groupe, et c'est là qu'une fuite se verrait.
+  await tab(bruno, 'Résultats');
+  await bruno.waitForSelector('.vote', { timeout: 20000 });
+  const verdicts = await bruno.$$eval('.vote', (rows) => rows.map((r) => r.textContent));
   assert.strictEqual(verdicts.length, 4,
     'les quatre votes doivent être publiés, or on en voit ' + verdicts.length + ' : ' +
     JSON.stringify(verdicts.map((v) => v.slice(0, 90))));
@@ -307,9 +337,9 @@ async function signIn(page, name, mode) {
   console.log('  ✓ le reveal ne grille aucun secret encore en jeu');
 
   /* ── 7. le classement ─────────────────────────────────────────────── */
-  await tab(alice, 'Classement');
-  await alice.waitForSelector('.rank', { timeout: 20000 });
-  const ranking = await alice.$$eval('.rank', (rows) => rows.map((r) => ({
+  await tab(bruno, 'Classement');
+  await bruno.waitForSelector('.rank', { timeout: 20000 });
+  const ranking = await bruno.$$eval('.rank', (rows) => rows.map((r) => ({
     name: r.querySelector('.who').firstChild.textContent.trim(),
     points: parseInt(r.querySelector('.pts').textContent, 10),
   })));
@@ -322,17 +352,17 @@ async function signIn(page, name, mode) {
   console.log('  ✓ barème correct : ' + JSON.stringify(points));
 
   /* ── 7 bis. l'animateur ajuste des points à la main ─────────────────── */
-  await tab(alice, 'Admin');
-  await alice.click('.segments button:text-is("Participants")');
-  await alice.click('.sheet__head:has-text("Diego")');
-  await alice.waitForSelector('.sheet.open input.tiny', { timeout: 20000 });
-  await alice.fill('.sheet.open input.tiny', '5');
-  await alice.click('.sheet.open button:text-is("Ajuster les points")');
-  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+  await tab(anim, 'Admin');
+  await anim.click('.segments button:text-is("Participants")');
+  await anim.click('.sheet__head:has-text("Diego")');
+  await anim.waitForSelector('.sheet.open input.tiny', { timeout: 20000 });
+  await anim.fill('.sheet.open input.tiny', '5');
+  await anim.click('.sheet.open button:text-is("Ajuster les points")');
+  await anim.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
 
-  await tab(alice, 'Classement');
-  await alice.waitForSelector('.rank', { timeout: 20000 });
-  const apres = Object.fromEntries(await alice.$$eval('.rank', (rows) => rows.map((r) => [
+  await tab(bruno, 'Classement');
+  await bruno.waitForSelector('.rank', { timeout: 20000 });
+  const apres = Object.fromEntries(await bruno.$$eval('.rank', (rows) => rows.map((r) => [
     r.querySelector('.who').firstChild.textContent.trim(),
     parseInt(r.querySelector('.pts').textContent, 10),
   ])));
@@ -358,25 +388,25 @@ async function signIn(page, name, mode) {
   assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), false,
     'avant nomination, Bruno ne doit rien lire des auteurs');
 
-  await tab(alice, 'Admin');
-  await alice.click('.segments button:text-is("Participants")');
-  await alice.click('.sheet__head:has-text("Bruno")');
-  await alice.waitForSelector('.sheet.open button:text-is("Nommer animateur")', { timeout: 20000 });
-  await alice.click('.sheet.open button:text-is("Nommer animateur")');
-  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+  await tab(anim, 'Admin');
+  await anim.click('.segments button:text-is("Participants")');
+  await anim.click('.sheet__head:has-text("Bruno")');
+  await anim.waitForSelector('.sheet.open button:text-is("Nommer animateur")', { timeout: 20000 });
+  await anim.click('.sheet.open button:text-is("Nommer animateur")');
+  await anim.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
   assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), true,
     'une fois nommé, Bruno doit voir les liens auteur↔secret');
 
-  await alice.click('.sheet.open button:text-is("Retirer le rôle d\'animateur")');
-  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+  await anim.click('.sheet.open button:text-is("Retirer le rôle d\'animateur")');
+  await anim.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
   assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), false,
     'le rôle retiré, Bruno ne doit plus rien lire des auteurs');
   console.log('  ✓ un second animateur se nomme et se révoque depuis la page');
 
   /* ── 8. le secret démasqué est bien sorti du jeu ───────────────────── */
-  await tab(alice, 'Les secrets');
-  await alice.waitForSelector('.secret.solved', { timeout: 20000 });
-  const solved = await alice.$$eval('.secret.solved .who', (els) => els.map((e) => e.textContent));
+  await tab(bruno, 'Les secrets');
+  await bruno.waitForSelector('.secret.solved', { timeout: 20000 });
+  const solved = await bruno.$$eval('.secret.solved .who', (els) => els.map((e) => e.textContent));
   assert.strictEqual(solved.length, 1, 'un seul secret démasqué');
   assert.ok(solved[0].includes('Bruno'), 'le secret démasqué est celui de Bruno');
   console.log('  ✓ ' + solved[0]);
@@ -386,7 +416,7 @@ async function signIn(page, name, mode) {
   // arrive le matin sur son téléphone.
   const matin = await (await browser.newContext({ viewport: { width: 400, height: 880 } })).newPage();
   matin.on('dialog', (d) => d.accept());
-  await signIn(matin, 'Alice', 'admin');
+  await signIn(matin, 'Admin', 'admin');
   await matin.waitForSelector('.segments', { timeout: 20000 });
   const volet = await matin.textContent('.segments button[aria-selected="true"]');
   assert.strictEqual(volet.trim(), 'Pilotage',

@@ -50,9 +50,9 @@ function secretCode() {
 /** Traduit les codes d'erreur Firebase en français compréhensible. */
 function humanError(error) {
   const code = (error && error.code) || '';
-  if (code.includes('email-already-in-use')) return 'Ce prénom est déjà pris. Ajoute une initiale, par exemple « Camille B. ».';
+  if (code.includes('email-already-in-use')) return "Cet identifiant est déjà pris. Ajoute l'initiale de ton nom, par exemple « Camille.B ».";
   if (code.includes('invalid-credential') || code.includes('wrong-password') || code.includes('user-not-found')) {
-    return 'Prénom ou mot de passe incorrect.';
+    return 'Identifiant ou mot de passe incorrect.';
   }
   if (code.includes('weak-password')) return 'Le mot de passe doit faire au moins 6 caractères.';
   if (code.includes('too-many-requests')) return 'Trop de tentatives. Attends une minute avant de réessayer.';
@@ -63,6 +63,18 @@ function humanError(error) {
   }
   return (error && error.message) || 'Une erreur est survenue.';
 }
+
+/**
+ * L'identifiant du compte de pilotage. Il est réservé : personne ne peut
+ * s'inscrire sous ce nom. Ce compte ne joue pas — il ne dépose pas de secret,
+ * n'apparaît ni dans les suspects ni au classement.
+ *
+ * Le porter ne donne aucun pouvoir en soi : les droits viennent du document
+ * `admins/<identifiant>` créé à la main dans la console Firebase. Quelqu'un
+ * qui devinerait le mot de passe entrerait dans un compte vide.
+ */
+const ADMIN_NAME = 'Admin';
+const ADMIN_KEY = 'admin';
 
 /* ───────────────────────────────────────────────────────────── état ──── */
 const DEFAULT_GAME = {
@@ -304,11 +316,14 @@ function onDbError(error) {
 /* ────────────────────────────────────────────────────────── comptes ──── */
 const emailFor = (name) => `${nameKey(name)}@${ACCOUNT_DOMAIN}`;
 
-async function register(name, password) {
+async function register(name, password, options = {}) {
   const clean = String(name || '').trim().replace(/\s+/g, ' ');
-  if (clean.length < 2) throw new Error('Ton prénom doit faire au moins 2 caractères.');
-  if (clean.length > 30) throw new Error('Ton prénom est trop long (30 caractères maximum).');
-  if (!nameKey(clean)) throw new Error("Ce prénom ne contient aucune lettre utilisable.");
+  if (clean.length < 2) throw new Error('Ton identifiant doit faire au moins 2 caractères.');
+  if (clean.length > 30) throw new Error('Ton identifiant est trop long (30 caractères maximum).');
+  if (!nameKey(clean)) throw new Error("Cet identifiant ne contient aucune lettre utilisable.");
+  if (!options.asAdmin && nameKey(clean) === ADMIN_KEY) {
+    throw new Error("« Admin » est réservé à l'animateur. Prends ton prénom et l'initiale de ton nom.");
+  }
   if (String(password || '').length < 6) throw new Error('Le mot de passe doit faire au moins 6 caractères.');
 
   const credential = await createUserWithEmailAndPassword(auth, emailFor(clean), password);
@@ -427,8 +442,11 @@ async function freshAdminData() {
 function computeScores(allVotes, authorOf, g) {
   const counted = (vote) => vote.day < g.day || (vote.day === g.day && g.roundStatus === 'closed');
   const adjust = g.adjust || {};
+  // Qui n'a pas déposé de secret n'a aucun point à gagner — les règles lui
+  // refusent même de voter. Le compte de pilotage sort donc de lui-même du
+  // classement, sans qu'on ait à le nommer.
   const rows = new Map(
-    [...S.players.values()].map((p) => [p.uid, {
+    [...S.players.values()].filter((p) => p.hasSecret || adjust[p.uid]).map((p) => [p.uid, {
       uid: p.uid, name: p.name, found: 0, fooled: 0,
       bonus: Math.round(Number(adjust[p.uid]) || 0),
       points: Math.round(Number(adjust[p.uid]) || 0),
@@ -745,16 +763,19 @@ function renderHero() {
   const solved = [...S.secrets.values()].filter((s) => s.solvedDay != null).length;
   const stats = clear($('heroStats'));
 
-  if (!S.user || g.phase === 'lobby') {
+  // Avant la connexion, aucun compteur : un visiteur n'a pas à savoir combien
+  // de monde est déjà là, et un « 0 secret » sur une partie qui démarre donne
+  // l'impression d'une page cassée.
+  if (!S.user) {
+    // rien
+  } else if (g.phase === 'lobby') {
     stats.appendChild(statChip(S.players.size, S.players.size > 1 ? 'inscrits' : 'inscrit'));
     stats.appendChild(statChip(total, total > 1 ? 'secrets' : 'secret'));
   } else {
     stats.appendChild(statChip('J' + g.day, 'journée'));
     stats.appendChild(statChip(solved + '/' + total, 'démasqués'));
-    if (S.scores.length) {
-      const mine = S.scores.find((row) => row.uid === S.user.uid);
-      stats.appendChild(statChip(mine ? mine.points : 0, 'mes points'));
-    }
+    const mine = S.scores.find((row) => row.uid === S.user.uid);
+    if (mine) stats.appendChild(statChip(mine.points, 'mes points'));
   }
 
   const bar = $('heroProgress');
@@ -803,17 +824,12 @@ function renderAuth() {
 
   // ── Entrer dans la partie ────────────────────────────────────────────
   // D'abord le logo, puis de quoi entrer, et seulement ensuite les règles :
-  // un stagiaire qui revient le troisième jour ne veut pas relire la notice
-  // avant d'atteindre son mot de passe.
+  // un stagiaire qui revient le troisième matin veut son mot de passe, pas
+  // le rappel du barème.
   const card = el('div', 'card');
   const switcher = el('div', 'segments inset');
-  const modes = [
-    ['register', 'Inscription'],
-    ['login', 'Connexion'],
-    ['admin', 'Admin'],
-  ];
   const buttons = new Map();
-  for (const [id, label] of modes) {
+  for (const [id, label] of [['register', 'Inscription'], ['login', 'Connexion'], ['admin', 'Admin']]) {
     const button = el('button', null, label);
     button.type = 'button';
     button.onclick = () => { S.authMode = id; paint(); };
@@ -823,48 +839,83 @@ function renderAuth() {
   card.appendChild(switcher);
 
   const form = el('form');
+  const nameLabel = el('label', null, 'Ton identifiant');
   const nameInput = document.createElement('input');
-  nameInput.type = 'text'; nameInput.autocomplete = 'username'; nameInput.placeholder = 'Camille';
-  nameInput.required = true;
+  nameInput.type = 'text'; nameInput.autocomplete = 'username'; nameInput.required = true;
   const passInput = document.createElement('input');
   passInput.type = 'password'; passInput.required = true;
   const hint = el('p', 'muted', '');
   const submit = el('button', 'btn full', '');
 
+  // Première mise en place : le compte de pilotage n'existe pas encore.
+  const createAdmin = el('button', 'linkbtn', 'Première fois ? Créer le compte Admin');
+  createAdmin.type = 'button';
+  const adminLine = el('p', 'linkline');
+  adminLine.appendChild(createAdmin);
+
   function paint() {
     const mode = S.authMode;
+    const isAdmin = mode === 'admin';
     for (const [id, button] of buttons) button.setAttribute('aria-selected', String(id === mode));
+
+    // En mode Admin l'identifiant est imposé : il n'y a qu'un compte de
+    // pilotage, et le laisser libre inviterait à en inventer un second.
+    nameLabel.textContent = isAdmin ? "Identifiant de l'animateur" : 'Ton identifiant';
+    if (isAdmin) nameInput.value = ADMIN_NAME;
+    else if (nameInput.readOnly) nameInput.value = '';   // on quitte le mode Admin
+    nameInput.readOnly = isAdmin;
+    nameInput.placeholder = isAdmin ? ADMIN_NAME : 'Adrien.M';
+
     submit.textContent = mode === 'register' ? "Je m'inscris"
-      : mode === 'admin' ? 'Entrer au pilotage' : 'Entrer dans la partie';
+      : isAdmin ? 'Entrer au pilotage' : 'Entrer dans la partie';
     passInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
     passInput.placeholder = mode === 'register' ? '6 caractères minimum' : '';
     hint.textContent = mode === 'register'
-      ? "Ce mot de passe sert juste à empêcher un camarade de voter à ta place. N'en réutilise pas un vrai."
-      : mode === 'admin'
-        ? "Connecte-toi avec ton compte : tu arriveras directement sur le poste de commande. Pas encore de compte ? Crée-le d'abord par « Inscription »."
-        : "Reprends le prénom exact choisi à l'inscription.";
+      ? "Ton prénom et l'initiale de ton nom, par exemple « Adrien.M » : c'est ce qui te distingue des autres Adrien du groupe. Le mot de passe sert juste à empêcher un camarade de voter à ta place — n'en réutilise pas un vrai."
+      : isAdmin
+        ? "Le compte de pilotage. Il ne joue pas : pas de secret à déposer, et personne ne peut t'accuser."
+        : "Reprends l'identifiant exact choisi à l'inscription.";
+    adminLine.classList.toggle('hidden', !isAdmin);
     say('authMsg', '');
   }
 
-  form.append(el('label', null, 'Ton prénom'), nameInput,
-              el('label', null, 'Ton mot de passe'), passInput, hint, submit);
-  form.onsubmit = async (event) => {
-    event.preventDefault();
+  async function enter(action) {
     submit.disabled = true;
+    createAdmin.disabled = true;
     say('authMsg', '');
     // L'onglet d'arrivée se choisit avant la connexion : l'écoute de
     // l'authentification peut redessiner la page avant que l'attente
     // ci-dessous ne rende la main.
     S.view = S.authMode === 'admin' ? 'anim' : 'secret';
     try {
-      if (S.authMode === 'register') await register(nameInput.value, passInput.value);
-      else await login(nameInput.value, passInput.value);
+      await action();
     } catch (error) {
       say('authMsg', error.code ? humanError(error) : error.message);
       submit.disabled = false;
+      createAdmin.disabled = false;
     }
+  }
+
+  form.append(nameLabel, nameInput, el('label', null, 'Ton mot de passe'), passInput, hint, submit);
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const name = nameInput.value;
+    const pass = passInput.value;
+    enter(() => (S.authMode === 'register' ? register(name, pass) : login(name, pass)));
   };
+  createAdmin.onclick = () => enter(async () => {
+    try {
+      await register(ADMIN_NAME, passInput.value, { asAdmin: true });
+    } catch (error) {
+      if (String(error.code || '').includes('email-already-in-use')) {
+        throw new Error('Le compte Admin existe déjà : entre son mot de passe et connecte-toi.');
+      }
+      throw error;
+    }
+  });
+
   card.appendChild(form);
+  card.appendChild(adminLine);
   const msg = el('div'); msg.id = 'authMsg';
   card.appendChild(msg);
   screen.appendChild(card);
@@ -1261,16 +1312,28 @@ function renderAdminBootstrap(screen) {
 
 /* ── le tableau de bord ────────────────────────────────────────────────── */
 
+/**
+ * Un compte de pilotage n'est pas un joueur : il ne dépose pas de secret et
+ * ne vote pas. Le compter fausserait « 5 secrets déposés sur 6 » et ferait
+ * chercher un absent qui n'existe pas.
+ *
+ * Un stagiaire promu animateur, lui, reste un joueur : il a son secret, il
+ * vote, et il faut pouvoir le retrouver dans la liste pour lui retirer le
+ * rôle. D'où la nuance : seul un animateur *sans secret* est un pur pilote.
+ */
+const estJoueur = (p) => p.hasSecret || !S.admins.has(p.uid);
+
 function adminFacts() {
   const g = game();
+  const joueurs = [...S.players.values()].filter(estJoueur);
   const withSecret = S.secrets.size;
   const solved = [...S.secrets.values()].filter((s) => s.solvedDay != null).length;
   const votedToday = new Set(S.allVotes.filter((v) => v.day === g.day).map((v) => v.voter));
-  const expected = [...S.players.values()].filter((p) => p.hasSecret);
+  const expected = joueurs.filter((p) => p.hasSecret);
   const missing = g.roundStatus === 'open'
     ? expected.filter((p) => !votedToday.has(p.uid)).sort((a, b) => a.name.localeCompare(b.name, 'fr'))
     : [];
-  return { g, withSecret, solved, votedToday, expected, missing };
+  return { g, joueurs, withSecret, solved, votedToday, expected, missing };
 }
 
 const nameOf = (uid) => (S.players.get(uid) ? S.players.get(uid).name : '?');
@@ -1290,15 +1353,15 @@ function adminVoteRow(vote) {
 }
 
 function renderPilotage(screen) {
-  const { g, withSecret, solved, votedToday, expected, missing } = adminFacts();
+  const { g, joueurs, withSecret, solved, votedToday, expected, missing } = adminFacts();
 
   const board = el('div', 'card');
   board.appendChild(el('h2', null, 'Tableau de bord'));
   const table = el('table');
   const lines = [
     ['Où on en est', phaseText()],
-    ['Inscrits', String(S.players.size)],
-    ['Secrets déposés', withSecret + ' / ' + S.players.size],
+    ['Inscrits', String(joueurs.length)],
+    ['Secrets déposés', withSecret + ' / ' + joueurs.length],
     ['Secrets démasqués', solved + ' / ' + withSecret],
     ['Barème', '+' + g.pointsCorrect + ' trouvé · +' + g.pointsWrong + ' par personne trompée'],
   ];
@@ -1386,7 +1449,8 @@ function renderParticipants(screen) {
   card.appendChild(el('p', 'muted',
     'Toi seul vois les secrets avec leur auteur, pour pouvoir modérer et animer le reveal à voix haute. Touche une fiche pour la déplier.'));
 
-  const people = [...S.players.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  const people = [...S.players.values()].filter(estJoueur)
+    .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   if (!people.length) card.appendChild(el('p', 'muted', 'Personne ne s’est encore inscrit.'));
 
   for (const person of people) {
