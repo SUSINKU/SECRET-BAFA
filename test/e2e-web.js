@@ -12,7 +12,61 @@
 
 const path = require('path');
 const assert = require('assert');
-const { chromium } = require(process.env.PLAYWRIGHT_PATH || 'playwright');
+function loadPlaywright() {
+  const tries = [process.env.PLAYWRIGHT_PATH, 'playwright',
+                 '/opt/node22/lib/node_modules/playwright',
+                 '/usr/lib/node_modules/playwright'].filter(Boolean);
+  for (const where of tries) {
+    try { return require(where); } catch (e) { /* on essaie le suivant */ }
+  }
+  console.error(
+    "Playwright est introuvable. Installe-le une fois :\n" +
+    "  npm install -g playwright && npx playwright install chromium\n" +
+    "puis relance npm run test:web.");
+  process.exit(1);
+}
+const { chromium } = loadPlaywright();
+
+/* ── la console Firebase, simulée ───────────────────────────────────────
+ * L'émulateur accepte le jeton « owner » : il écrit alors sous l'identité du
+ * projet, exactement comme la console web, sans passer par les règles de
+ * sécurité. C'est le seul chemin par lequel le premier animateur peut être
+ * nommé — et ce test le prouve autant qu'il s'en sert.
+ */
+const { firebaseConfig } = (() => {
+  // On lit le même fichier que la page : l'émulateur range les données sous
+  // l'identifiant de projet que le navigateur lui annonce, pas sous celui
+  // passé en ligne de commande. Se tromper ici reviendrait à inspecter une
+  // base vide en croyant que le jeu ne marche pas.
+  const source = require('fs').readFileSync(path.join(__dirname, '..', 'web', 'js', 'config.js'), 'utf8');
+  const block = source.match(/const firebaseConfig = (\{[\s\S]*?\});/);
+  return { firebaseConfig: eval('(' + block[1] + ')') };
+})();
+const EMU = 'http://127.0.0.1:' + (process.env.FIRESTORE_EMULATOR_PORT || 8080) +
+  '/v1/projects/' + firebaseConfig.projectId + '/databases/(default)/documents';
+
+async function asProjectOwner(method, pathPart, body) {
+  const res = await fetch(EMU + pathPart, {
+    method,
+    headers: { Authorization: 'Bearer owner', 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) throw new Error(method + ' ' + pathPart + ' → ' + res.status + ' ' + (await res.text()));
+  return res.json();
+}
+
+/** L'identifiant Firebase d'un joueur, retrouvé par son prénom. */
+async function uidOf(name) {
+  const { documents = [] } = await asProjectOwner('GET', '/players?pageSize=300');
+  const found = documents.find((d) => d.fields && d.fields.name && d.fields.name.stringValue === name);
+  if (!found) throw new Error("aucun compte au nom de " + name);
+  return found.name.split('/').pop();
+}
+
+/** Ce que le formateur fait une fois, à la main, dans la console Firebase. */
+async function nameAdminFromConsole(uid) {
+  await asProjectOwner('PATCH', '/admins/' + uid, { fields: { since: { integerValue: '1' } } });
+}
 
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:5000';
 const PASSWORD = 'motdepasse';
@@ -65,12 +119,25 @@ async function signIn(page, name, mode) {
 (async () => {
   browser = await chromium.launch();
 
-  /* ── 1. l'animateur prend son rôle avant tout le monde ─────────────── */
+  /* ── 1. le rôle d'animateur ne se réclame pas ──────────────────────── */
   const alice = await pageFor('Alice');
   await signIn(alice, 'Alice', 'register');
   await tab(alice, 'Animateur');
-  await alice.click('button:text-is("Devenir animateur")');
+  await alice.waitForSelector('.copyline input', { timeout: 20000 });
+
+  // Aucun bouton ne permet de s'emparer du rôle : c'est tout l'intérêt.
+  assert.strictEqual(await alice.locator('button:text-is("Devenir animateur")').count(), 0,
+    "aucun bouton ne doit permettre de se nommer animateur soi-même");
+
+  const aliceUid = await alice.inputValue('.copyline input');
+  assert.ok(aliceUid && aliceUid.length > 10, "la page doit afficher l'identifiant à recopier");
+
+  // Le formateur le fait une fois dans la console Firebase…
+  await nameAdminFromConsole(aliceUid);
+  // …et la page bascule toute seule, sans rechargement : le temps réel sert
+  // aussi à ça.
   await alice.waitForSelector('button:text("Lancer la partie")', { timeout: 20000 });
+  console.log('  ✓ le rôle se donne depuis la console, et la page le voit sans recharger');
 
   /* ── 2. tout le monde s'inscrit et dépose son secret ───────────────── */
   for (const [name, secret] of PLAYERS) {
@@ -85,12 +152,14 @@ async function signIn(page, name, mode) {
 
   /* ── 3. l'animateur voit qui a écrit quoi, et lance ────────────────── */
   await tab(alice, 'Animateur');
-  await alice.waitForSelector('.secret .pill', { timeout: 20000 });
-  const codeByName = Object.fromEntries(await alice.$$eval('#screen .card:nth-of-type(2) .secret', (boxes) =>
+  await alice.click('.segments button:text-is("Participants")');
+  await alice.waitForSelector('.sheet', { timeout: 20000 });
+  const codeByName = Object.fromEntries(await alice.$$eval('.sheet', (boxes) =>
     boxes.map((box) => {
-      const who = box.querySelector('strong');
-      const pill = box.querySelector('.pill');
-      return [who ? who.textContent : '', pill ? pill.textContent.replace('Secret ', '') : ''];
+      const who = box.querySelector('.sheet__name');
+      const pill = box.querySelector('.sheet__badges .pill');
+      return [who ? who.firstChild.textContent.trim() : '',
+              pill ? pill.textContent.replace('Secret ', '') : ''];
     })));
   assert.strictEqual(Object.keys(codeByName).length, 5, 'la vue animateur doit lister les 5 participants');
   for (const [name] of PLAYERS) {
@@ -98,6 +167,15 @@ async function signIn(page, name, mode) {
       `l'animateur doit voir le secret de ${name}`);
   }
 
+  // La fiche dépliée montre bien le texte du secret, en clair.
+  await alice.click('.sheet__head:has-text("Nour")');
+  await alice.waitForSelector('.sheet.open .sheet__body', { timeout: 20000 });
+  const fiche = await alice.textContent('.sheet.open .sheet__body');
+  assert.ok(fiche.includes('Prune'), "la fiche doit montrer le secret en clair : " + fiche.slice(0, 120));
+  await alice.click('.sheet.open .sheet__head');
+  console.log('  ✓ une fiche par participant, secret en clair et historique');
+
+  await alice.click('.segments button:text-is("Pilotage")');
   await alice.click('button:text("Lancer la partie")');
   await alice.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
 
@@ -110,10 +188,8 @@ async function signIn(page, name, mode) {
     const app = fb.initializeApp(firebaseConfig, 'sonde-' + Date.now());
     const auth = fb.getAuth(app);
     const db = fb.getFirestore(app);
-    if (firebaseConfig.useEmulators) {
-      fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-      fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    }
+    fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
     await fb.signInWithEmailAndPassword(auth, 'bruno@' + ACCOUNT_DOMAIN, password);
 
     const attempt = async (label, fn) => {
@@ -159,18 +235,38 @@ async function signIn(page, name, mode) {
   }
   console.log('  ✓ quatre votes enregistrés');
 
-  /* ── 5 bis. l'animateur doit voir les quatre votes AVANT de clôturer ── */
+  /* ── 5 bis. le poste de commande pendant la journée ────────────────── */
   await signIn(alice, 'Alice', 'login');
+  await tab(alice, 'Animateur');
+  await alice.click('.segments button:text-is("Pilotage")');
+  await alice.waitForSelector('.chips .chip', { timeout: 20000 });
+
+  // Qui relancer, nommément : seul Diego n'a pas voté.
+  const aRelancer = await alice.$$eval('.chips .chip', (els) => els.map((e) => e.textContent.trim()));
+  assert.deepStrictEqual(aRelancer, ['Diego'],
+    "l'animateur doit voir nommément qui n'a pas voté, or : " + JSON.stringify(aRelancer));
+
+  // Les votes en direct, avec la vérité en face, avant que quiconque ne les voie.
+  const enDirect = await alice.$$eval('.vote', (rows) => rows.map((r) => r.textContent.trim()));
+  assert.strictEqual(enDirect.length, 4,
+    "l'animateur doit voir les 4 votes en direct, or " + enDirect.length);
+  assert.strictEqual(enDirect.filter((v) => v.includes('Juste')).length, 2,
+    'deux votes justes attendus en direct : ' + JSON.stringify(enDirect));
+  assert.ok(enDirect.some((v) => v.includes("Faux — c'est")),
+    "les votes faux doivent nommer le vrai auteur pour l'animateur");
+  console.log('  ✓ à relancer : ' + JSON.stringify(aRelancer) + ' · 4 votes visibles en direct');
+
+  // Pendant ce temps, Bruno ne voit toujours rien de ces votes.
+  const brunoVoit = await bruno.$$eval('.vote', (rows) => rows.length);
+  assert.strictEqual(brunoVoit, 0, 'un stagiaire ne doit voir aucun vote avant le reveal');
   const seen = await alice.evaluate(async (password) => {
     const fb = await import('/js/firebase.js');
     const { firebaseConfig, ACCOUNT_DOMAIN } = await import('/js/config.js');
     const app = fb.initializeApp(firebaseConfig, 'anim-' + Date.now());
     const auth = fb.getAuth(app);
     const db = fb.getFirestore(app);
-    if (firebaseConfig.useEmulators) {
-      fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
-      fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    }
+    fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
     await fb.signInWithEmailAndPassword(auth, 'alice@' + ACCOUNT_DOMAIN, password);
     const snap = await fb.getDocs(fb.collection(db, 'votes'));
     return snap.docs.map((d) => d.id);
@@ -219,6 +315,58 @@ async function signIn(page, name, mode) {
   assert.deepStrictEqual(points, { Alice: 4, Chloé: 4, Bruno: 0, Diego: 0, Nour: 0 },
     'barème incorrect : ' + JSON.stringify(points));
   console.log('  ✓ barème correct : ' + JSON.stringify(points));
+
+  /* ── 7 bis. l'animateur ajuste des points à la main ─────────────────── */
+  await tab(alice, 'Animateur');
+  await alice.click('.segments button:text-is("Participants")');
+  await alice.click('.sheet__head:has-text("Diego")');
+  await alice.waitForSelector('.sheet.open input.tiny', { timeout: 20000 });
+  await alice.fill('.sheet.open input.tiny', '5');
+  await alice.click('.sheet.open button:text-is("Ajuster les points")');
+  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+
+  await tab(alice, 'Classement');
+  await alice.waitForSelector('.rank', { timeout: 20000 });
+  const apres = Object.fromEntries(await alice.$$eval('.rank', (rows) => rows.map((r) => [
+    r.querySelector('.who').firstChild.textContent.trim(),
+    parseInt(r.querySelector('.pts').textContent, 10),
+  ])));
+  assert.strictEqual(apres.Diego, 5, 'Diego doit avoir les 5 points ajoutés à la main : ' + JSON.stringify(apres));
+  assert.strictEqual(apres.Alice, 4, "l'ajustement ne doit toucher que la personne visée");
+  console.log('  ✓ ajustement manuel des points : ' + JSON.stringify(apres));
+
+  /* ── 7 ter. un second animateur, nommé puis révoqué ─────────────────── */
+  const peutLireLesAuteurs = async (page, prenom) => page.evaluate(async ([password, prenom]) => {
+    const fb = await import('/js/firebase.js');
+    const { firebaseConfig, ACCOUNT_DOMAIN } = await import('/js/config.js');
+    const email = prenom.toLowerCase() + '@' + ACCOUNT_DOMAIN;
+    const app = fb.initializeApp(firebaseConfig, 'role-' + Date.now() + Math.random());
+    const auth = fb.getAuth(app);
+    const db = fb.getFirestore(app);
+    fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
+    fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
+    await fb.signInWithEmailAndPassword(auth, email, password);
+    try { await fb.getDocs(fb.collection(db, 'authorOf')); return true; }
+    catch (e) { return false; }
+  }, [PASSWORD, prenom]);
+
+  assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), false,
+    'avant nomination, Bruno ne doit rien lire des auteurs');
+
+  await tab(alice, 'Animateur');
+  await alice.click('.segments button:text-is("Participants")');
+  await alice.click('.sheet__head:has-text("Bruno")');
+  await alice.waitForSelector('.sheet.open button:text-is("Nommer animateur")', { timeout: 20000 });
+  await alice.click('.sheet.open button:text-is("Nommer animateur")');
+  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+  assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), true,
+    'une fois nommé, Bruno doit voir les liens auteur↔secret');
+
+  await alice.click('.sheet.open button:text-is("Retirer le rôle d\'animateur")');
+  await alice.waitForSelector('#sheetMsg .msg.ok', { timeout: 20000 });
+  assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), false,
+    'le rôle retiré, Bruno ne doit plus rien lire des auteurs');
+  console.log('  ✓ un second animateur se nomme et se révoque depuis la page');
 
   /* ── 8. le secret démasqué est bien sorti du jeu ───────────────────── */
   await tab(alice, 'Les secrets');

@@ -24,8 +24,13 @@ Le barème est modifiable dans l'espace animateur.
   et cette personne n'apparaît plus dans la liste des suspects (chacun n'écrit
   qu'un seul secret).
 - Un vote raté **ne révèle jamais** l'auteur du secret visé : il reste en jeu.
-- On ne peut pas voter sur son propre secret, ni s'accuser soi-même.
+- On ne peut pas voter sur son propre secret, ni s'accuser soi-même, ni accuser
+  quelqu'un dont le secret est déjà tombé.
 - Un seul vote par jour et par personne, définitif une fois validé.
+
+Ces interdits ne sont pas seulement empêchés par les boutons de la page : ils
+sont refusés par la base elle-même. Quelqu'un qui bricolerait la page depuis
+son téléphone se ferait refouler pareil.
 
 ## Installation
 
@@ -61,20 +66,48 @@ aucun droit. Ce sont les règles de sécurité qui protègent les données.
 
 *Settings → Pages → Source : **GitHub Actions***. C'est tout : le workflow
 [`pages.yml`](.github/workflows/pages.yml) publie le dossier `web/` à chaque
-modification et affiche l'adresse obtenue.
+modification de la branche `main`, et affiche l'adresse obtenue.
 
 Retourne ensuite dans Firebase : **Authentication → Settings → Domaines
 autorisés** → ajoute le domaine de ta page (`ton-nom.github.io`), sinon la
 connexion sera refusée.
 
-### 4. Prendre le rôle d'animateur — avant les autres
+### 4. Te nommer animateur — une seule fois, dans la console
 
-Ouvre l'application, crée ton compte, puis **Animateur → Devenir animateur**.
+Le rôle d'animateur **ne se réclame pas depuis l'application**. S'il suffisait
+de cliquer, le premier stagiaire curieux verrait tous les secrets. Il s'inscrit
+une fois dans la console Firebase, qui n'appartient qu'à toi.
 
-**Fais-le avant de donner le lien aux stagiaires.** Le rôle se prend une seule
-fois : le premier qui le réclame le garde, et le verrou se referme
-définitivement. C'est lui qui donne le droit de voir les auteurs, de clôturer
-les journées et d'attribuer les points.
+1. Ouvre l'application, crée ton compte, va dans l'onglet **Animateur** :
+   la page affiche **ton identifiant**, avec un bouton *Copier*.
+2. Console Firebase → **Firestore Database → Données** → *Démarrer une
+   collection*, nommée exactement **`admins`**.
+3. Comme **ID du document**, colle ton identifiant. Ajoute un champ `since`, de
+   type `number`, valeur `1`. Enregistre.
+4. Reviens sur la page : elle bascule toute seule sur le poste de commande,
+   sans rechargement.
+
+Ensuite, tu peux **nommer un second animateur directement depuis la page**
+(onglet *Animateur → Participants →* fiche de la personne), et lui retirer ce
+droit. Tu ne peux pas te le retirer à toi-même : c'est ce qui garantit qu'une
+partie ne se retrouve jamais sans personne aux commandes.
+
+## L'espace animateur
+
+Quatre volets, tous pensés pour être lus d'un téléphone, debout, entre deux
+ateliers.
+
+- **Pilotage** — l'état de la partie, les actions (lancer, clôturer, ouvrir la
+  journée suivante, terminer), **qui n'a pas encore voté, nommément**, et **les
+  votes de la journée en direct** avec la vérité en face. C'est ce qui permet
+  de préparer le reveal du soir.
+- **Participants** — une fiche par personne : son secret en clair avec son code,
+  ses points et leur détail, l'historique de ses votes. On y annule un vote
+  saisi par erreur, on ajuste des points à la main, on supprime un secret
+  déplacé, on retire quelqu'un de la partie, on nomme un animateur.
+- **Historique** — toutes les journées, tous les votes, depuis le début.
+- **Réglages** — le nom de la partie, le barème, la liste des animateurs, et la
+  zone rouge (repartir à zéro en gardant ou non les comptes).
 
 ## Déroulé d'une partie
 
@@ -98,6 +131,8 @@ donc les règles de sécurité, et elles seules, qui gardent l'information cach�
 - Au reveal, c'est le navigateur de l'animateur qui calcule les points et publie
   ce qui doit devenir public — en n'y mettant jamais l'auteur d'un secret encore
   en lice.
+- Le rôle d'animateur ne peut être ni réclamé, ni volé : il n'existe qu'un seul
+  chemin pour l'obtenir la première fois, et il passe par la console Firebase.
 
 Ces garanties sont vérifiées, pas supposées : voir les tests ci-dessous.
 
@@ -105,22 +140,38 @@ Ces garanties sont vérifiées, pas supposées : voir les tests ci-dessous.
 
 ```bash
 npm install
-npm test          # les deux suites
+npm test            # les deux suites
 npm run test:rules  # les règles de sécurité, contre l'émulateur Firestore
 npm run test:web    # une partie entière jouée dans un navigateur
 ```
 
-`test:rules` vérifie qu'un stagiaire ne peut ni lire les liens auteur↔secret, ni
-les votes, ni voter deux fois, ni antidater son vote, ni s'attribuer le secret
-d'un autre, ni publier de faux scores, ni prendre un rôle d'animateur déjà pris.
+`test:rules` (32 vérifications) couvre le fait qu'un stagiaire ne peut ni lire
+les liens auteur↔secret, ni les votes, ni voter deux fois, ni antidater son
+vote, ni voter sans avoir déposé de secret, ni voter sur un secret déjà tombé,
+ni accuser quelqu'un déjà démasqué, ni s'attribuer le secret d'un autre, ni
+publier de faux scores, ni se nommer animateur — pas même quand la partie n'en
+a encore aucun.
 
 `test:web` va plus loin : il joue une partie complète à cinq dans un vrai
 navigateur et **tente réellement les lectures interdites** depuis la page d'un
-joueur, avant de vérifier le barème, le reveal et la sortie du jeu d'un secret
-démasqué.
+joueur. Il vérifie aussi que le premier animateur ne peut être nommé que depuis
+la console, que la page le voit sans recharger, que l'animateur voit en direct
+les votes et les absents, que l'ajustement manuel des points fonctionne, et
+qu'un second animateur nommé puis révoqué gagne et reperd bien l'accès aux
+données cachées.
 
 Les tests ont besoin des émulateurs Firebase (téléchargés au premier lancement)
-et de Java. Pour jouer en local : `npm run serve`, puis <http://127.0.0.1:5000>.
+et de Java. `test:web` a en plus besoin de Playwright, qui ne fait pas partie
+des dépendances du projet à cause de son poids :
+
+```bash
+npm install -g playwright && npx playwright install chromium
+```
+
+Pour jouer en local : `npm run serve`, puis <http://127.0.0.1:5000>. Sur une
+adresse locale, l'application se branche d'elle-même sur les émulateurs — la
+base de ta vraie formation n'est jamais touchée par un essai. Ajoute `?prod` à
+l'adresse pour viser tout de même le vrai projet.
 
 ## Structure
 
@@ -131,10 +182,13 @@ web/                 l'application — c'est tout le jeu
   js/config.js       le seul fichier à remplir
   js/firebase.js     le SDK Firebase, embarqué (aucun appel à un CDN)
   css/, fonts/       la charte : dégradé, Poppins hébergée en local
+  images/            le logo détouré et les icônes d'application
 firestore.rules      qui a le droit de lire et d'écrire quoi
 firebase.json        hébergement et émulateurs
+netlify.toml         de quoi publier sur Netlify si tu changes d'avis
 build/               source du bundle Firebase (npm run build)
 test/                règles de sécurité, partie complète en navigateur
+PROMPT.md            le cahier des charges d'origine
 ```
 
 ## Vie privée et modération

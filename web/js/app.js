@@ -68,13 +68,16 @@ function humanError(error) {
 const DEFAULT_GAME = {
   gameName: 'Secret BAFA', phase: 'lobby', day: 0, roundStatus: null,
   pointsCorrect: 3, pointsWrong: 1,
+  // Points ajoutés ou retirés à la main par l'animateur : { uid: nombre }.
+  adjust: {},
 };
 
 const S = {
   user: null,
   isAdmin: false,
+  admins: new Set(),    // uid des animateurs — lisible par tout le monde
   game: null,
-  players: new Map(),   // uid -> {uid, name, hasSecret}
+  players: new Map(),   // uid -> {uid, name, hasSecret, revealed}
   secrets: new Map(),   // id  -> {id, text, code, sortKey, solvedDay, authorUid, authorName}
   mySecretId: null,
   myVotes: new Map(),   // jour -> {secretId, guess}
@@ -89,6 +92,8 @@ const S = {
   pickWho: '',
   resultDay: null,
   resultsCache: new Map(),
+  animPanel: 'pilotage',  // onglet ouvert dans l'espace animateur
+  openSheet: null,        // fiche participant dépliée
 };
 
 const game = () => S.game || DEFAULT_GAME;
@@ -104,6 +109,22 @@ const TABS = [
 let db = null;
 let auth = null;
 const unsubscribes = [];
+const adminUnsubs = [];
+
+/**
+ * Faut-il parler aux émulateurs plutôt qu'au vrai projet ?
+ *
+ * Sur une machine de développement, oui : sans quoi `npm run serve` et les
+ * tests écriraient dans la base de la vraie formation. En ligne, jamais.
+ * On le déduit de l'adresse, pour qu'il n'y ait aucun réglage à penser — et
+ * donc aucun réglage à oublier de remettre avant de publier.
+ * `?prod` force le vrai projet depuis une page locale, au besoin.
+ */
+function useEmulators() {
+  if (typeof firebaseConfig.useEmulators === 'boolean') return firebaseConfig.useEmulators;
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+  return local && !new URLSearchParams(location.search).has('prod');
+}
 
 function configured() {
   return firebaseConfig && !String(firebaseConfig.projectId || '').startsWith('À_REMPLIR');
@@ -148,8 +169,7 @@ async function boot() {
   auth = getAuth(app);
   db = getFirestore(app);
 
-  // Développement : on branche les émulateurs plutôt que le vrai projet.
-  if (firebaseConfig.useEmulators) {
+  if (useEmulators()) {
     connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
     connectFirestoreEmulator(db, '127.0.0.1', 8080);
   }
@@ -157,8 +177,10 @@ async function boot() {
 
   onAuthStateChanged(auth, async (user) => {
     for (const stop of unsubscribes.splice(0)) stop();
+    for (const stop of adminUnsubs.splice(0)) stop();
     S.user = user || null;
     S.isAdmin = false;
+    S.admins = new Set();
     S.mySecretId = null;
     S.myVotes = new Map();
     S.authorOf = new Map();
@@ -170,9 +192,6 @@ async function boot() {
 
 async function afterSignIn() {
   const uid = S.user.uid;
-  try {
-    S.isAdmin = (await getDoc(doc(db, 'admins', uid))).exists();
-  } catch (e) { S.isAdmin = false; }
 
   // La toute première personne crée l'état de la partie (vierge : les règles
   // n'autorisent rien d'autre).
@@ -192,7 +211,10 @@ async function afterSignIn() {
     S.players = new Map();
     for (const d of snap.docs) {
       const data = d.data();
-      S.players.set(d.id, { uid: d.id, name: data.name, hasSecret: data.hasSecret === true });
+      S.players.set(d.id, {
+        uid: d.id, name: data.name,
+        hasSecret: data.hasSecret === true, revealed: data.revealed === true,
+      });
     }
     render();
   }, onDbError));
@@ -238,17 +260,36 @@ async function afterSignIn() {
     onDbError
   ));
 
-  if (S.isAdmin) watchAdmin();
+  // Qui est animateur est public : c'est ce qui permet à la page de savoir,
+  // sans recharger, qu'on vient de te confier le rôle — ou de te le retirer.
+  watch(onSnapshot(collection(db, 'admins'), (snap) => {
+    S.admins = new Set(snap.docs.map((d) => d.id));
+    syncAdminWatchers();
+    render();
+  }, onDbError));
+
   render(true);
 }
 
-/** L'animateur seul voit les liens d'auteur et l'ensemble des votes. */
-function watchAdmin() {
-  watch(onSnapshot(collection(db, 'authorOf'), (snap) => {
+/**
+ * Branche ou débranche les écoutes réservées à l'animateur.
+ *
+ * Elles portent sur les deux collections que les règles de sécurité ferment
+ * aux stagiaires : le lien secret → auteur, et l'ensemble des votes. Les
+ * garder abonnées alors qu'on vient de perdre le rôle ferait pleuvoir des
+ * refus ; on les coupe, et on oublie ce qu'on en savait.
+ */
+function syncAdminWatchers() {
+  const isAdmin = Boolean(S.user && S.admins.has(S.user.uid));
+  if (isAdmin === S.isAdmin) return;
+  S.isAdmin = isAdmin;
+  for (const stop of adminUnsubs.splice(0)) stop();
+  if (!isAdmin) { S.authorOf = new Map(); S.allVotes = []; return; }
+  adminUnsubs.push(onSnapshot(collection(db, 'authorOf'), (snap) => {
     S.authorOf = new Map(snap.docs.map((d) => [d.id, d.data().uid]));
     render();
   }, onDbError));
-  watch(onSnapshot(collection(db, 'votes'), (snap) => {
+  adminUnsubs.push(onSnapshot(collection(db, 'votes'), (snap) => {
     S.allVotes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     render();
   }, onDbError));
@@ -303,12 +344,15 @@ async function saveSecret(text) {
 }
 
 /* ────────────────────────────────────────────────────────────── vote ─── */
+/**
+ * Les personnes qu'on peut encore accuser : celles qui ont déposé un secret
+ * et dont le secret n'a pas été percé. Le drapeau `revealed` est posé par
+ * l'animateur au reveal ; c'est le même que consultent les règles de
+ * sécurité, pour que la page et la base disent exactement la même chose.
+ */
 function suspects() {
-  const revealed = new Set(
-    [...S.secrets.values()].filter((s) => s.authorUid).map((s) => s.authorUid)
-  );
   return [...S.players.values()]
-    .filter((p) => p.hasSecret && !revealed.has(p.uid) && p.uid !== S.user.uid)
+    .filter((p) => p.hasSecret && !p.revealed && p.uid !== S.user.uid)
     .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
 }
 
@@ -327,14 +371,25 @@ async function castVote(secretId, guessUid) {
 }
 
 /* ─────────────────────────────────────────────────────── animateur ──── */
-async function claimAdmin() {
-  const uid = S.user.uid;
-  const batch = writeBatch(db);
-  batch.set(doc(db, 'admins', uid), { since: Date.now() });
-  batch.set(doc(db, 'adminLock', 'lock'), { claimed: true });
-  await batch.commit();
-  S.isAdmin = true;
-  watchAdmin();
+
+/**
+ * Confie le rôle d'animateur à quelqu'un, ou le lui retire.
+ *
+ * Le rôle ne se réclame pas : il se donne. Le tout premier animateur est
+ * inscrit à la main dans la console Firebase, qui écrit sous l'identité du
+ * projet et ne passe donc pas par les règles de sécurité. Depuis
+ * l'application, seul un animateur peut en nommer un autre — jamais
+ * lui-même, et jamais se révoquer : sinon le rôle se volerait d'un clic, ou
+ * se perdrait par mégarde en pleine partie.
+ */
+async function grantAdmin(uid) {
+  if (uid === S.user.uid) throw new Error('Tu es déjà animateur.');
+  await setDoc(doc(db, 'admins', uid), { since: Date.now(), by: S.user.uid });
+}
+
+async function revokeAdmin(uid) {
+  if (uid === S.user.uid) throw new Error("Tu ne peux pas te retirer toi-même le rôle d'animateur.");
+  await deleteDoc(doc(db, 'admins', uid));
 }
 
 async function startGame() {
@@ -360,18 +415,27 @@ async function freshAdminData() {
   };
 }
 
-/** Le calcul des points : le seul moment où l'information cachée sert à
- *  produire quelque chose de public, et c'est l'animateur qui le publie. */
-function computeScores(allVotes, authorOf) {
-  const g = game();
-  const closedDays = new Set(
-    allVotes.map((v) => v.day).filter((d) => d < g.day || g.roundStatus === 'closed')
-  );
+/**
+ * Le calcul des points : le seul moment où l'information cachée sert à
+ * produire quelque chose de public, et c'est l'animateur qui le publie.
+ *
+ * `g` est passé en argument plutôt que lu dans l'état global : au moment où
+ * l'on publie les scores, la clôture vient d'être écrite et l'instantané
+ * local n'est pas forcément revenu. Prendre l'état qu'on vient d'écrire est
+ * la seule façon de ne pas oublier les points de la journée qu'on clôture.
+ */
+function computeScores(allVotes, authorOf, g) {
+  const counted = (vote) => vote.day < g.day || (vote.day === g.day && g.roundStatus === 'closed');
+  const adjust = g.adjust || {};
   const rows = new Map(
-    [...S.players.values()].map((p) => [p.uid, { uid: p.uid, name: p.name, found: 0, fooled: 0, points: 0 }])
+    [...S.players.values()].map((p) => [p.uid, {
+      uid: p.uid, name: p.name, found: 0, fooled: 0,
+      bonus: Math.round(Number(adjust[p.uid]) || 0),
+      points: Math.round(Number(adjust[p.uid]) || 0),
+    }])
   );
   for (const vote of allVotes) {
-    if (!closedDays.has(vote.day)) continue;
+    if (!counted(vote)) continue;
     const author = authorOf.get(vote.secretId);
     if (!author) continue;
     if (vote.guess === author) {
@@ -385,6 +449,12 @@ function computeScores(allVotes, authorOf) {
   return [...rows.values()].sort(
     (a, b) => b.points - a.points || b.found - a.found || a.name.localeCompare(b.name, 'fr')
   );
+}
+
+/** Recalcule et republie le classement à partir de l'état frais de la base. */
+async function publishScores(g) {
+  const { votes, authorOf } = await freshAdminData();
+  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(votes, authorOf, g), day: g.day });
 }
 
 async function closeDay() {
@@ -407,6 +477,10 @@ async function closeDay() {
     const author = authorOf.get(secretId);
     batch.update(doc(db, 'secrets', secretId),
       { solvedDay: g.day, authorUid: author, authorName: nameOf(author) });
+    // Démasqué : cette personne sort de la liste des suspects. Le drapeau est
+    // public — c'est lui que les règles de sécurité consultent pour refuser
+    // qu'on l'accuse encore les jours suivants.
+    if (S.players.has(author)) batch.update(doc(db, 'players', author), { revealed: true });
   }
 
   // Le reveal public : un vote raté ne nomme jamais l'auteur d'un secret qui
@@ -436,11 +510,12 @@ async function closeDay() {
   batch.set(doc(db, 'results', String(g.day)), { day: g.day, votes: publicVotes, solved: solvedList });
 
   const remaining = [...S.secrets.values()].filter((s) => s.solvedDay == null && !found.has(s.id));
+  const after = { ...g, roundStatus: 'closed', phase: remaining.length === 0 ? 'fini' : 'jeu' };
   batch.update(doc(db, 'game', 'state'),
-    { roundStatus: 'closed', phase: remaining.length === 0 ? 'fini' : 'jeu' });
+    { roundStatus: after.roundStatus, phase: after.phase });
   await batch.commit();
 
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: g.day });
+  await publishScores(after);
 }
 
 async function openNextDay() {
@@ -452,48 +527,92 @@ async function openNextDay() {
 
 async function endGame() {
   if (game().roundStatus === 'open') await closeDay();
-  const { votes: allVotes, authorOf } = await freshAdminData();
+  const g = game();
+  const { authorOf } = await freshAdminData();
   const nameOf = (uid) => (S.players.get(uid) ? S.players.get(uid).name : '?');
   const batch = writeBatch(db);
   for (const secret of S.secrets.values()) {
     if (secret.authorUid) continue;
     const author = authorOf.get(secret.id);
-    if (author) batch.update(doc(db, 'secrets', secret.id), { authorUid: author, authorName: nameOf(author) });
+    if (!author) continue;
+    batch.update(doc(db, 'secrets', secret.id), { authorUid: author, authorName: nameOf(author) });
   }
   batch.update(doc(db, 'game', 'state'), { phase: 'fini' });
   await batch.commit();
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: game().day });
+  await publishScores({ ...g, phase: 'fini' });
 }
 
 async function saveSettings(patch) {
   await updateDoc(doc(db, 'game', 'state'), patch);
-  const { votes: allVotes, authorOf } = await freshAdminData();
-  await setDoc(doc(db, 'scores', 'state'), { rows: computeScores(allVotes, authorOf), day: game().day });
+  await publishScores({ ...game(), ...patch });
+}
+
+/** Ajoute ou retire des points à la main, sans toucher aux votes. */
+async function adjustPoints(uid, points) {
+  const value = Math.round(Number(points) || 0);
+  const adjust = { ...(game().adjust || {}) };
+  if (value === 0) delete adjust[uid]; else adjust[uid] = value;
+  await saveSettings({ adjust });
+}
+
+/** Annule un vote saisi par erreur : la personne pourra revoter aujourd'hui. */
+async function cancelVote(voteId) {
+  await deleteDoc(doc(db, 'votes', voteId));
+  await publishScores(game());
+}
+
+/**
+ * Supprime un secret déplacé. Les votes qui le visaient partent avec lui —
+ * les laisser fausserait les points et afficherait un secret fantôme au
+ * reveal. Son auteur peut alors en déposer un autre si la partie n'est pas
+ * encore lancée.
+ */
+async function deleteSecret(secretId) {
+  const author = S.authorOf.get(secretId);
+  const batch = writeBatch(db);
+  for (const vote of S.allVotes.filter((v) => v.secretId === secretId)) {
+    batch.delete(doc(db, 'votes', vote.id));
+  }
+  batch.delete(doc(db, 'secrets', secretId));
+  batch.delete(doc(db, 'authorOf', secretId));
+  if (author) {
+    batch.delete(doc(db, 'mine', author));
+    batch.update(doc(db, 'players', author), { hasSecret: false, revealed: false });
+  }
+  await batch.commit();
+  await publishScores(game());
 }
 
 async function removePlayer(uid) {
   const batch = writeBatch(db);
   for (const vote of S.allVotes.filter((v) => v.voter === uid)) batch.delete(doc(db, 'votes', vote.id));
-  const secretId = [...S.authorOf.entries()].find(([, owner]) => owner === uid);
-  if (secretId) {
-    for (const vote of S.allVotes.filter((v) => v.secretId === secretId[0])) {
+  const owned = [...S.authorOf.entries()].find(([, owner]) => owner === uid);
+  if (owned) {
+    const secretId = owned[0];
+    for (const vote of S.allVotes.filter((v) => v.secretId === secretId)) {
       batch.delete(doc(db, 'votes', vote.id));
     }
-    batch.delete(doc(db, 'secrets', secretId[0]));
-    batch.delete(doc(db, 'authorOf', secretId[0]));
+    batch.delete(doc(db, 'secrets', secretId));
+    batch.delete(doc(db, 'authorOf', secretId));
   }
+  batch.delete(doc(db, 'admins', uid));
   batch.delete(doc(db, 'mine', uid));
   batch.delete(doc(db, 'players', uid));
   await batch.commit();
+  await publishScores(game());
 }
 
 async function resetGame(keepPlayers) {
+  const g = game();
   const batch = writeBatch(db);
   for (const vote of S.allVotes) batch.delete(doc(db, 'votes', vote.id));
-  for (let day = 1; day <= game().day; day += 1) batch.delete(doc(db, 'results', String(day)));
+  for (let day = 1; day <= g.day; day += 1) batch.delete(doc(db, 'results', String(day)));
   if (keepPlayers) {
     for (const secret of S.secrets.values()) {
       batch.update(doc(db, 'secrets', secret.id), { solvedDay: null, authorUid: null, authorName: null });
+    }
+    for (const player of S.players.values()) {
+      if (player.revealed) batch.update(doc(db, 'players', player.uid), { revealed: false });
     }
   } else {
     for (const secret of S.secrets.values()) {
@@ -505,7 +624,7 @@ async function resetGame(keepPlayers) {
       if (player.uid !== S.user.uid) batch.delete(doc(db, 'players', player.uid));
     }
   }
-  batch.update(doc(db, 'game', 'state'), { phase: 'lobby', day: 0, roundStatus: null });
+  batch.update(doc(db, 'game', 'state'), { phase: 'lobby', day: 0, roundStatus: null, adjust: {} });
   batch.set(doc(db, 'scores', 'state'), { rows: [], day: 0 });
   await batch.commit();
 }
@@ -521,6 +640,29 @@ document.addEventListener('focusout', () => {
   if (renderPending) { renderPending = false; setTimeout(() => render(true), 0); }
 });
 
+/**
+ * L'en-tête porte le logo tant que la partie garde son nom ; si l'animateur
+ * la rebaptise, c'est ce nom-là qui s'affiche — un logo qui dirait autre
+ * chose que le titre serait un mensonge poli.
+ */
+function renderBrand() {
+  const name = game().gameName;
+  const brand = clear($('brand'));
+  // Sur l'écran de connexion, le logo s'affiche déjà en grand juste dessous :
+  // le répéter dans le bandeau ne dirait rien de plus.
+  if (!S.user) return;
+  brand.appendChild(name === DEFAULT_GAME.gameName ? logoImage('wordmark') : el('span', 'brand__text', name));
+}
+
+function logoImage(cls) {
+  const img = document.createElement('img');
+  img.className = cls;
+  img.src = 'images/logo-secret-bafa.webp';
+  img.alt = 'Secret BAFA';
+  img.width = 560; img.height = 321;   // évite que la page sursaute au chargement
+  return img;
+}
+
 function phaseText() {
   const g = game();
   if (g.phase === 'lobby') return 'Inscriptions ouvertes · dépôt des secrets';
@@ -533,7 +675,7 @@ function render(force) {
   if (!S.ready) return;
   if (!force && isTyping()) { renderPending = true; return; }
 
-  $('gameName').textContent = game().gameName;
+  renderBrand();
   $('statusLine').textContent = phaseText();
   renderHero();
 
@@ -620,6 +762,13 @@ function renderHero() {
   bar.classList.toggle('hidden', !show);
   if (show) {
     $('progressFill').style.width = Math.round((solved / total) * 100) + '%';
+    // Un palier par secret : on voit le chemin parcouru et celui qui reste.
+    const ticks = clear($('progressTicks'));
+    for (let i = 1; i < total && total <= 40; i += 1) {
+      const tick = document.createElement('i');
+      tick.style.left = (i / total) * 100 + '%';
+      ticks.appendChild(tick);
+    }
     $('progressLabel').textContent =
       solved + ' secret' + (solved > 1 ? 's' : '') + ' démasqué' + (solved > 1 ? 's' : '') + ' sur ' + total;
   }
@@ -649,12 +798,7 @@ function renderAuth() {
   const screen = clear($('screen'));
 
   const brand = el('div', 'hero__logo');
-  const box = el('div', 'brandcard');
-  const logo = document.createElement('img');
-  logo.src = 'images/logo-secret-bafa.png';
-  logo.alt = 'Secret BAFA';
-  box.appendChild(logo);
-  brand.appendChild(box);
+  brand.appendChild(logoImage('wordmark big'));
   screen.appendChild(brand);
 
   const rules = el('div', 'card');
@@ -1028,53 +1172,128 @@ function renderRanking(screen) {
 }
 
 /* ────────────────────────────────────────────────────────── animateur ── */
-function renderAnim(screen) {
-  const g = game();
 
-  if (!S.isAdmin) {
-    const card = el('div', 'card');
-    card.appendChild(el('h2', null, 'Espace animateur'));
+/** Un champ en lecture seule + un bouton « copier », pour un identifiant
+ *  qu'on doit transporter jusqu'à la console Firebase sans le recopier. */
+function copyField(value, label) {
+  const wrap = el('div', 'copyline');
+  const field = document.createElement('input');
+  field.type = 'text'; field.readOnly = true; field.value = value;
+  field.setAttribute('aria-label', label || 'À copier');
+  field.onclick = () => field.select();
+  const button = el('button', 'btn small', 'Copier');
+  button.type = 'button';
+  button.onclick = async () => {
+    field.select();
+    try {
+      await navigator.clipboard.writeText(value);
+      button.textContent = 'Copié !';
+    } catch (e) {
+      // Navigateur ancien ou page non sécurisée : le texte est déjà
+      // sélectionné, il ne reste qu'un appui long ou un Ctrl+C.
+      button.textContent = 'Fais Ctrl+C';
+    }
+    setTimeout(() => { button.textContent = 'Copier'; }, 2400);
+  };
+  wrap.append(field, button);
+  return wrap;
+}
+
+/** Ce que voit quelqu'un qui n'est pas animateur : comment le devenir. */
+function renderAdminBootstrap(screen) {
+  const card = el('div', 'card');
+  card.appendChild(el('h2', null, 'Espace animateur'));
+
+  if (S.admins.size) {
+    const names = [...S.admins].map((uid) => (S.players.get(uid) || {}).name).filter(Boolean);
+    card.appendChild(el('p', 'muted', names.length
+      ? 'Cette partie est animée par ' + names.join(', ') + '.'
+      : "Cette partie a déjà un animateur."));
     card.appendChild(el('p', 'muted',
-      "Le rôle d'animateur se prend une seule fois, par la première personne qui le réclame. " +
-      "Si c'est toi le formateur, prends-le maintenant, avant de donner le lien aux stagiaires."));
-    const take = el('button', 'btn full', 'Devenir animateur');
-    take.type = 'button';
-    take.onclick = async () => {
-      if (!window.confirm("Prendre le rôle d'animateur ? Il ne pourra plus être pris par quelqu'un d'autre.")) return;
-      take.disabled = true;
-      try { await claimAdmin(); render(true); }
-      catch (error) {
-        say('animMsg', "Le rôle est déjà pris par quelqu'un d'autre.");
-        take.disabled = false;
-      }
-    };
-    card.appendChild(take);
-    const msg = el('div'); msg.id = 'animMsg'; card.appendChild(msg);
-    return screen.appendChild(card);
+      "Si tu es le formateur et que tu devrais en faire partie, demande à un animateur de te nommer depuis sa page : c'est instantané."));
+  } else {
+    card.appendChild(el('p', 'muted',
+      "Personne ne pilote encore cette partie. Le rôle d'animateur ne se réclame pas d'un clic — sinon le premier stagiaire curieux verrait tous les secrets. Il s'inscrit une fois dans la console Firebase, qui n'appartient qu'à toi."));
   }
 
+  card.appendChild(el('h3', null, 'Ton identifiant'));
+  card.appendChild(copyField(S.user.uid, 'Ton identifiant technique'));
+  card.appendChild(el('p', 'muted',
+    "C'est le nom que Firebase donne à ton compte. Il ne sert qu'à cette mise en place."));
+
+  if (!S.admins.size) {
+    card.appendChild(el('h3', null, 'Te nommer animateur — une seule fois'));
+    const steps = el('ol');
+    [
+      ['Ouvre la console', 'console.firebase.google.com → ton projet → Firestore Database → onglet Données.'],
+      ['Démarre une collection', 'Clique « Démarrer une collection » et nomme-la exactement admins (en minuscules).'],
+      ['Colle ton identifiant', "Comme « ID du document », colle l'identifiant ci-dessus. Ajoute un champ since, de type number, avec la valeur 1."],
+      ['Enregistre', 'Reviens sur cette page : elle bascule toute seule, sans recharger.'],
+    ].forEach(([title, detail]) => {
+      const item = el('li');
+      item.appendChild(el('strong', null, title));
+      item.appendChild(el('div', 'muted', detail));
+      steps.appendChild(item);
+    });
+    card.appendChild(steps);
+    card.appendChild(el('p', 'muted',
+      "Ensuite, tu pourras nommer un second animateur directement depuis cette page — plus besoin de la console."));
+  }
+  screen.appendChild(card);
+}
+
+/* ── le tableau de bord ────────────────────────────────────────────────── */
+
+function adminFacts() {
+  const g = game();
   const withSecret = S.secrets.size;
   const solved = [...S.secrets.values()].filter((s) => s.solvedDay != null).length;
   const votedToday = new Set(S.allVotes.filter((v) => v.day === g.day).map((v) => v.voter));
+  const expected = [...S.players.values()].filter((p) => p.hasSecret);
+  const missing = g.roundStatus === 'open'
+    ? expected.filter((p) => !votedToday.has(p.uid)).sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+    : [];
+  return { g, withSecret, solved, votedToday, expected, missing };
+}
 
-  const pilot = el('div', 'card');
-  pilot.appendChild(el('h2', null, 'Pilotage de la partie'));
+const nameOf = (uid) => (S.players.get(uid) ? S.players.get(uid).name : '?');
+
+/** Un vote vu par l'animateur : qui, quel secret, qui il accuse, juste ou faux. */
+function adminVoteRow(vote) {
+  const secret = S.secrets.get(vote.secretId);
+  const author = S.authorOf.get(vote.secretId);
+  const correct = Boolean(author && vote.guess === author);
+  const row = el('div', 'vote' + (correct ? ' hit' : ''));
+  const head = el('p', null,
+    nameOf(vote.voter) + ' → secret ' + (secret ? secret.code : '?') + ' → ' + nameOf(vote.guess));
+  row.appendChild(head);
+  row.appendChild(el('span', 'pill' + (correct ? '' : ' bad'),
+    correct ? 'Juste' : "Faux — c'est " + nameOf(author)));
+  return row;
+}
+
+function renderPilotage(screen) {
+  const { g, withSecret, solved, votedToday, expected, missing } = adminFacts();
+
+  const board = el('div', 'card');
+  board.appendChild(el('h2', null, 'Tableau de bord'));
   const table = el('table');
   const lines = [
+    ['Où on en est', phaseText()],
     ['Inscrits', String(S.players.size)],
     ['Secrets déposés', withSecret + ' / ' + S.players.size],
     ['Secrets démasqués', solved + ' / ' + withSecret],
-    ['Barème', '+' + g.pointsCorrect + ' trouvé / +' + g.pointsWrong + ' par erreur'],
+    ['Barème', '+' + g.pointsCorrect + ' trouvé · +' + g.pointsWrong + ' par personne trompée'],
   ];
   if (g.roundStatus === 'open') {
-    lines.splice(2, 0, ['Votes de la journée ' + g.day, votedToday.size + ' / ' + withSecret]);
+    lines.splice(3, 0, ['Votes de la journée ' + g.day, votedToday.size + ' / ' + expected.length]);
   }
   for (const [label, value] of lines) {
     const tr = el('tr');
     tr.append(el('th', null, label), el('td', null, value));
     table.appendChild(tr);
   }
-  pilot.appendChild(table);
+  board.appendChild(table);
 
   const actions = el('div', 'row');
   function action(label, cls, enabled, fn, confirmText) {
@@ -1097,44 +1316,260 @@ function renderAnim(screen) {
   action('Ouvrir la journée suivante', 'ghost', g.phase === 'jeu' && g.roundStatus === 'closed', openNextDay);
   action('Terminer la partie', 'ghost', g.phase !== 'fini', endGame,
     'Terminer la partie ? Tous les secrets restants seront révélés.');
-  pilot.appendChild(actions);
-  const pmsg = el('div'); pmsg.id = 'pilotMsg'; pilot.appendChild(pmsg);
-  screen.appendChild(pilot);
+  board.appendChild(actions);
+  const pmsg = el('div'); pmsg.id = 'pilotMsg'; board.appendChild(pmsg);
+  screen.appendChild(board);
 
-  const people = el('div', 'card');
-  people.appendChild(el('h2', null, 'Participants'));
-  people.appendChild(el('p', 'muted',
-    'Toi seul vois les secrets avec leur auteur, pour pouvoir modérer et animer le reveal à voix haute.'));
-  const bySecret = new Map([...S.authorOf.entries()].map(([secretId, uid]) => [uid, secretId]));
-  for (const player of [...S.players.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'))) {
-    const secretId = bySecret.get(player.uid);
+  // ── Qui n'a pas encore voté, nommément : de quoi relancer les gens de
+  //    vive voix pendant la pause, au lieu d'attendre en regardant un chiffre.
+  if (g.roundStatus === 'open') {
+    const relance = el('div', 'card');
+    relance.appendChild(el('h2', null, 'À relancer'));
+    if (!missing.length) {
+      relance.appendChild(el('p', null, expected.length
+        ? 'Tout le monde a voté. Tu peux clôturer la journée.'
+        : "Personne n'a encore déposé de secret."));
+    } else {
+      relance.appendChild(el('p', 'muted',
+        plural(missing.length, "personne n'a pas voté", "personnes n'ont pas voté") + ' pour la journée ' + g.day + ' :'));
+      const chips = el('div', 'chips');
+      for (const person of missing) chips.appendChild(el('span', 'chip', person.name));
+      relance.appendChild(chips);
+    }
+    screen.appendChild(relance);
+  }
+
+  // ── Les votes en direct : ce qui prépare l'animation du soir.
+  const live = el('div', 'card');
+  const dayVotes = S.allVotes.filter((v) => v.day === g.day)
+    .sort((a, b) => nameOf(a.voter).localeCompare(nameOf(b.voter), 'fr'));
+  live.appendChild(el('h2', null, 'Les votes de la journée ' + g.day));
+  if (g.phase === 'lobby') {
+    live.appendChild(el('p', 'muted', "La partie n'a pas encore commencé."));
+  } else if (!dayVotes.length) {
+    live.appendChild(el('p', 'muted', 'Aucun vote pour le moment.'));
+  } else {
+    live.appendChild(el('p', 'muted', g.roundStatus === 'open'
+      ? "Toi seul les vois. Les stagiaires ne les découvriront qu'à la clôture."
+      : 'Journée révélée : tout le monde les voit.'));
+    for (const vote of dayVotes) live.appendChild(adminVoteRow(vote));
+  }
+  screen.appendChild(live);
+}
+
+/* ── une fiche par participant ─────────────────────────────────────────── */
+
+function renderParticipants(screen) {
+  const { g, votedToday } = adminFacts();
+  const secretOf = new Map([...S.authorOf.entries()].map(([secretId, uid]) => [uid, secretId]));
+  const scoreOf = new Map(S.scores.map((row) => [row.uid, row]));
+
+  const card = el('div', 'card');
+  card.appendChild(el('h2', null, 'Participants'));
+  card.appendChild(el('p', 'muted',
+    'Toi seul vois les secrets avec leur auteur, pour pouvoir modérer et animer le reveal à voix haute. Touche une fiche pour la déplier.'));
+
+  const people = [...S.players.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  if (!people.length) card.appendChild(el('p', 'muted', 'Personne ne s’est encore inscrit.'));
+
+  for (const person of people) {
+    const secretId = secretOf.get(person.uid);
     const secret = secretId ? S.secrets.get(secretId) : null;
-    const box = el('div', 'secret flat');
-    const head = el('p');
-    head.appendChild(el('strong', null, player.name));
-    head.appendChild(document.createTextNode(' '));
-    head.appendChild(el('span', secret ? 'pill' : 'pill bad', secret ? 'Secret ' + secret.code : 'Pas de secret'));
-    if (secret && secret.solvedDay != null) head.appendChild(el('span', 'pill grey', ' démasqué '));
-    if (g.roundStatus === 'open' && votedToday.has(player.uid)) head.appendChild(el('span', 'pill', ' a voté '));
-    box.appendChild(head);
-    if (secret) box.appendChild(el('span', 'txt', secret.text));
+    const score = scoreOf.get(person.uid);
+    const open = S.openSheet === person.uid;
 
-    if (player.uid !== S.user.uid) {
-      const remove = el('button', 'btn small bad', 'Retirer');
+    const box = el('div', 'sheet' + (open ? ' open' : ''));
+    const head = el('button', 'sheet__head');
+    head.type = 'button';
+    head.setAttribute('aria-expanded', String(open));
+    const title = el('span', 'sheet__name', person.name);
+    if (S.admins.has(person.uid)) title.appendChild(el('span', 'pill violet', 'animateur'));
+    head.appendChild(title);
+    const badges = el('span', 'sheet__badges');
+    badges.appendChild(el('span', secret ? 'pill' : 'pill bad', secret ? 'Secret ' + secret.code : 'Pas de secret'));
+    if (person.revealed) badges.appendChild(el('span', 'pill grey', 'démasqué'));
+    if (g.roundStatus === 'open') {
+      badges.appendChild(votedToday.has(person.uid)
+        ? el('span', 'pill', 'a voté')
+        : el('span', 'pill bad', 'pas voté'));
+    }
+    if (score) badges.appendChild(el('span', 'pill grey', score.points + ' pts'));
+    head.appendChild(badges);
+    head.onclick = () => { S.openSheet = open ? null : person.uid; render(true); };
+    box.appendChild(head);
+
+    if (!open) { card.appendChild(box); continue; }
+
+    const body = el('div', 'sheet__body');
+    if (secret) {
+      body.appendChild(el('h3', null, 'Son secret'));
+      const quote = el('div', 'secret flat');
+      quote.appendChild(el('span', 'code', 'Secret ' + secret.code));
+      quote.appendChild(el('span', 'txt', secret.text));
+      if (secret.solvedDay != null) {
+        quote.appendChild(el('span', 'who', 'Démasqué journée ' + secret.solvedDay));
+      }
+      body.appendChild(quote);
+    }
+
+    body.appendChild(el('h3', null, 'Ses points'));
+    const table = el('table');
+    for (const [label, value] of [
+      ['Total', score ? String(score.points) : '0'],
+      ['Secrets trouvés', score ? String(score.found) : '0'],
+      ['Personnes trompées par son secret', score ? String(score.fooled) : '0'],
+      ['Ajustement manuel', score && score.bonus ? (score.bonus > 0 ? '+' : '') + score.bonus : '—'],
+    ]) {
+      const tr = el('tr');
+      tr.append(el('th', null, label), el('td', null, value));
+      table.appendChild(tr);
+    }
+    body.appendChild(table);
+
+    const history = S.allVotes.filter((v) => v.voter === person.uid).sort((a, b) => a.day - b.day);
+    body.appendChild(el('h3', null, 'Ses votes'));
+    if (!history.length) body.appendChild(el('p', 'muted', "Elle ou il n'a encore voté aucun jour."));
+    for (const vote of history) {
+      const target = S.secrets.get(vote.secretId);
+      const author = S.authorOf.get(vote.secretId);
+      const correct = Boolean(author && vote.guess === author);
+      const line = el('div', 'histline');
+      line.appendChild(el('span', 'day', 'J' + vote.day));
+      line.appendChild(el('span', 'what',
+        'secret ' + (target ? target.code : '?') + ' → ' + nameOf(vote.guess)));
+      line.appendChild(el('span', 'pill' + (correct ? '' : ' bad'), correct ? 'juste' : 'faux'));
+      const undo = el('button', 'linkbtn', 'annuler');
+      undo.type = 'button';
+      undo.onclick = async () => {
+        if (!window.confirm('Annuler le vote de ' + person.name + ' pour la journée ' + vote.day +
+          " ?\n\nS'il s'agit de la journée en cours, la personne pourra revoter.")) return;
+        try { await cancelVote(vote.id); say('sheetMsg', 'Vote annulé.', 'ok'); }
+        catch (error) { say('sheetMsg', humanError(error)); }
+      };
+      line.appendChild(undo);
+      body.appendChild(line);
+    }
+
+    body.appendChild(el('h3', null, 'Agir sur cette personne'));
+    const form = el('div', 'row');
+
+    const bonusInput = document.createElement('input');
+    bonusInput.type = 'number'; bonusInput.step = '1'; bonusInput.className = 'tiny';
+    bonusInput.value = String(score && score.bonus ? score.bonus : 0);
+    bonusInput.setAttribute('aria-label', 'Points à ajouter ou retirer à ' + person.name);
+    const applyBonus = el('button', 'btn small ghost', 'Ajuster les points');
+    applyBonus.type = 'button';
+    applyBonus.onclick = async () => {
+      try {
+        await adjustPoints(person.uid, bonusInput.value);
+        say('sheetMsg', 'Points ajustés pour ' + person.name + '.', 'ok');
+      } catch (error) { say('sheetMsg', humanError(error)); }
+    };
+    form.append(bonusInput, applyBonus);
+
+    if (secret) {
+      const dropSecret = el('button', 'btn small ghost', 'Supprimer son secret');
+      dropSecret.type = 'button';
+      dropSecret.onclick = async () => {
+        if (!window.confirm('Supprimer le secret de ' + person.name + ' ?\n\n' +
+          "Les votes qui le visaient seront effacés. Si la partie n'est pas lancée, la personne pourra en déposer un autre.")) return;
+        try { await deleteSecret(secret.id); say('sheetMsg', 'Secret supprimé.', 'ok'); }
+        catch (error) { say('sheetMsg', humanError(error)); }
+      };
+      form.appendChild(dropSecret);
+    }
+
+    if (person.uid !== S.user.uid) {
+      if (S.admins.has(person.uid)) {
+        const revoke = el('button', 'btn small ghost', "Retirer le rôle d'animateur");
+        revoke.type = 'button';
+        revoke.onclick = async () => {
+          if (!window.confirm('Retirer le rôle d’animateur à ' + person.name +
+            " ?\n\nCette personne ne verra plus les secrets ni les votes.")) return;
+          try { await revokeAdmin(person.uid); say('sheetMsg', 'Rôle retiré.', 'ok'); }
+          catch (error) { say('sheetMsg', humanError(error)); }
+        };
+        form.appendChild(revoke);
+      } else {
+        const grant = el('button', 'btn small ghost', 'Nommer animateur');
+        grant.type = 'button';
+        grant.onclick = async () => {
+          if (!window.confirm('Nommer ' + person.name + " animateur ?\n\n" +
+            'Cette personne verra tous les secrets, leur auteur et tous les votes, et pourra piloter la partie.')) return;
+          try { await grantAdmin(person.uid); say('sheetMsg', person.name + ' est animateur.', 'ok'); }
+          catch (error) { say('sheetMsg', humanError(error)); }
+        };
+        form.appendChild(grant);
+      }
+
+      const remove = el('button', 'btn small bad', 'Retirer de la partie');
       remove.type = 'button';
       remove.onclick = async () => {
-        if (!window.confirm('Retirer ' + player.name + ' ? Son secret et ses votes seront effacés.')) return;
-        try { await removePlayer(player.uid); }
-        catch (error) { window.alert(humanError(error)); }
+        if (!window.confirm('Retirer ' + person.name + ' ? Son secret et ses votes seront effacés.')) return;
+        try { S.openSheet = null; await removePlayer(person.uid); }
+        catch (error) { say('sheetMsg', humanError(error)); }
       };
-      box.appendChild(remove);
+      form.appendChild(remove);
     }
-    people.appendChild(box);
+    body.appendChild(form);
+    const msg = el('div'); msg.id = 'sheetMsg'; body.appendChild(msg);
+
+    box.appendChild(body);
+    card.appendChild(box);
   }
-  screen.appendChild(people);
+  screen.appendChild(card);
+}
+
+/* ── l'historique complet ──────────────────────────────────────────────── */
+
+function renderHistory(screen) {
+  const g = game();
+  const card = el('div', 'card');
+  card.appendChild(el('h2', null, 'Historique complet'));
+  card.appendChild(el('p', 'muted',
+    'Toutes les journées, tous les votes depuis le début, avec la vérité en face.'));
+
+  const days = [...new Set(S.allVotes.map((v) => v.day))].sort((a, b) => b - a);
+  if (!days.length) {
+    card.appendChild(el('p', 'muted', "Aucun vote n'a encore été enregistré."));
+    return screen.appendChild(card);
+  }
+
+  for (const day of days) {
+    const votes = S.allVotes.filter((v) => v.day === day)
+      .sort((a, b) => nameOf(a.voter).localeCompare(nameOf(b.voter), 'fr'));
+    const right = votes.filter((v) => S.authorOf.get(v.secretId) === v.guess).length;
+    card.appendChild(el('h3', null, 'Journée ' + day +
+      (day === g.day && g.roundStatus === 'open' ? ' — en cours' : '') +
+      ' · ' + right + ' juste' + (right > 1 ? 's' : '') + ' sur ' + votes.length));
+    for (const vote of votes) card.appendChild(adminVoteRow(vote));
+  }
+  screen.appendChild(card);
+}
+
+/* ── les réglages ──────────────────────────────────────────────────────── */
+
+function renderAdminSettings(screen) {
+  const g = game();
+
+  const team = el('div', 'card');
+  team.appendChild(el('h2', null, 'Les animateurs'));
+  team.appendChild(el('p', 'muted',
+    "Un animateur voit tout et pilote la partie. Tu peux en nommer d'autres, et leur retirer ce droit — depuis la fiche de la personne, dans l'onglet Participants."));
+  const list = el('div', 'chips');
+  for (const uid of S.admins) {
+    const chip = el('span', 'chip violet',
+      (S.players.get(uid) ? S.players.get(uid).name : 'compte inconnu') +
+      (uid === S.user.uid ? ' (toi)' : ''));
+    list.appendChild(chip);
+  }
+  team.appendChild(list);
+  team.appendChild(el('p', 'muted',
+    "Tu ne peux pas te retirer toi-même le rôle : c'est ce qui garantit qu'une partie n'est jamais orpheline. Demande-le à un autre animateur."));
+  screen.appendChild(team);
 
   const settings = el('div', 'card');
-  settings.appendChild(el('h2', null, 'Réglages'));
+  settings.appendChild(el('h2', null, 'Nom et barème'));
   const form = el('form');
   const nameInput = document.createElement('input');
   nameInput.type = 'text'; nameInput.maxLength = 40; nameInput.value = g.gameName;
@@ -1155,12 +1590,11 @@ function renderAnim(screen) {
         pointsCorrect: Math.max(0, Math.min(100, Math.round(Number(okInput.value) || 0))),
         pointsWrong: Math.max(0, Math.min(100, Math.round(Number(koInput.value) || 0))),
       });
-      say('setMsg', 'Réglages enregistrés.', 'ok');
+      say('setMsg', 'Réglages enregistrés. Les points sont recalculés.', 'ok');
     } catch (error) { say('setMsg', humanError(error)); }
     save.disabled = false;
   };
   settings.appendChild(form);
-  const smsg = el('div'); smsg.id = 'setMsg'; settings.appendChild(smsg);
 
   settings.appendChild(el('h3', null, 'Zone rouge'));
   const danger = el('div', 'row');
@@ -1181,10 +1615,35 @@ function renderAnim(screen) {
   };
   danger.append(soft, hard);
   settings.appendChild(danger);
+  const smsg = el('div'); smsg.id = 'setMsg'; settings.appendChild(smsg);
   settings.appendChild(el('p', 'muted',
     "« Tout effacer » supprime les comptes dans la base, mais pas dans Firebase Authentication : " +
     "pour repartir totalement de zéro, vide aussi la liste des utilisateurs depuis la console Firebase."));
   screen.appendChild(settings);
+}
+
+const ANIM_PANELS = [
+  ['pilotage', 'Pilotage', renderPilotage],
+  ['participants', 'Participants', renderParticipants],
+  ['historique', 'Historique', renderHistory],
+  ['reglages', 'Réglages', renderAdminSettings],
+];
+
+function renderAnim(screen) {
+  if (!S.isAdmin) return renderAdminBootstrap(screen);
+
+  const switcher = el('div', 'segments');
+  for (const [id, label] of ANIM_PANELS) {
+    const button = el('button', null, label);
+    button.type = 'button';
+    button.setAttribute('aria-selected', String(S.animPanel === id));
+    button.onclick = () => { S.animPanel = id; render(true); };
+    switcher.appendChild(button);
+  }
+  screen.appendChild(switcher);
+
+  const panel = ANIM_PANELS.find(([id]) => id === S.animPanel) || ANIM_PANELS[0];
+  panel[2](screen);
 }
 
 boot();

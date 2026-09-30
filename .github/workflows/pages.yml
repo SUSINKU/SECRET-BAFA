@@ -1,10 +1,11 @@
-# Publie le dossier web/ sur GitHub Pages à chaque envoi sur la branche.
-# À activer une fois dans le dépôt : Settings → Pages → Source : GitHub Actions.
+# Publie le dossier web/ sur GitHub Pages à chaque envoi sur la branche
+# principale. À activer une fois dans le dépôt :
+# Settings → Pages → Source : GitHub Actions.
 name: Publier le jeu
 
 on:
   push:
-    branches: [main, claude/secret-bafa-app-enop6d]
+    branches: [main]
     paths: ['web/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 

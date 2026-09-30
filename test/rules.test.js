@@ -45,9 +45,10 @@ async function baseGame(extra = {}) {
     await setDoc(doc(db, 'game/state'), Object.assign({
       gameName: 'Secret BAFA', phase: 'lobby', day: 0, roundStatus: null,
       pointsCorrect: 3, pointsWrong: 1,
+      adjust: {},
     }, extra));
     await setDoc(doc(db, 'admins', ANIM), { since: 1 });
-    await setDoc(doc(db, 'adminLock/lock'), { claimed: true });
+    await setDoc(doc(db, 'players', ANIM), { name: 'Anim', nameKey: 'anim' });
     for (const [uid, name] of [[ALICE, 'Alice'], [BRUNO, 'Bruno'], [CHLOE, 'Chloé']]) {
       await setDoc(doc(db, 'players', uid), { name, nameKey: name.toLowerCase() });
     }
@@ -60,6 +61,10 @@ async function seedSecret(uid, secretId, text, solvedDay = null) {
     await setDoc(doc(db, 'secrets', secretId), { text, code: secretId.slice(0, 3).toUpperCase(), sortKey: secretId, solvedDay });
     await setDoc(doc(db, 'authorOf', secretId), { uid });
     await setDoc(doc(db, 'mine', uid), { secretId });
+    // `revealed` suit `solvedDay` : c'est ce drapeau public que les règles
+    // consultent pour refuser qu'on accuse encore cette personne.
+    await setDoc(doc(db, 'players', uid),
+      { hasSecret: true, revealed: solvedDay != null }, { merge: true });
   });
 }
 
@@ -121,6 +126,7 @@ check("un joueur ne peut pas lister les votes de la journée", async () => {
 check("on vote une fois, pour soi, et on ne peut pas se corriger", async () => {
   await baseGame({ phase: 'jeu', day: 1, roundStatus: 'open' });
   await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.');
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
   const bruno = as(BRUNO);
 
   // voter au nom d'un autre
@@ -153,6 +159,7 @@ check("on ne vote pas sur son propre secret, ni pour soi-même", async () => {
 check("aucun vote hors d'une journée ouverte", async () => {
   await baseGame({ phase: 'jeu', day: 1, roundStatus: 'closed' });
   await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.');
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
   await assertFails(setDoc(doc(as(BRUNO), 'votes/1_' + BRUNO),
     { day: 1, voter: BRUNO, secretId: 's-alice', guess: CHLOE }));
 });
@@ -160,10 +167,47 @@ check("aucun vote hors d'une journée ouverte", async () => {
 check("on ne peut pas antidater ni postdater son vote", async () => {
   await baseGame({ phase: 'jeu', day: 2, roundStatus: 'open' });
   await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.');
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
   await assertFails(setDoc(doc(as(BRUNO), 'votes/1_' + BRUNO),
     { day: 1, voter: BRUNO, secretId: 's-alice', guess: CHLOE }));
   await assertSucceeds(setDoc(doc(as(BRUNO), 'votes/2_' + BRUNO),
     { day: 2, voter: BRUNO, secretId: 's-alice', guess: CHLOE }));
+});
+
+check("on ne vote pas sans avoir déposé son propre secret", async () => {
+  await baseGame({ phase: 'jeu', day: 1, roundStatus: 'open' });
+  await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.');
+  // Chloé n'a rien déposé : elle est spectatrice, pas joueuse.
+  await assertFails(setDoc(doc(as(CHLOE), 'votes/1_' + CHLOE),
+    { day: 1, voter: CHLOE, secretId: 's-alice', guess: BRUNO }));
+});
+
+check("un secret déjà démasqué est sorti du jeu, y compris dans les règles", async () => {
+  await baseGame({ phase: 'jeu', day: 2, roundStatus: 'open' });
+  await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.', 1);
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
+  await assertFails(setDoc(doc(as(BRUNO), 'votes/2_' + BRUNO),
+    { day: 2, voter: BRUNO, secretId: 's-alice', guess: CHLOE }));
+});
+
+check("on n'accuse plus quelqu'un dont le secret est tombé", async () => {
+  await baseGame({ phase: 'jeu', day: 2, roundStatus: 'open' });
+  await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.', 1);
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
+  await seedSecret(CHLOE, 's-chloe', 'Le secret de Chloé, bien assez long.');
+  // Alice a été démasquée journée 1 : elle n'est plus une suspecte valable.
+  await assertFails(setDoc(doc(as(BRUNO), 'votes/2_' + BRUNO),
+    { day: 2, voter: BRUNO, secretId: 's-chloe', guess: ALICE }));
+  await assertSucceeds(setDoc(doc(as(BRUNO), 'votes/2_' + BRUNO),
+    { day: 2, voter: BRUNO, secretId: 's-chloe', guess: CHLOE }));
+});
+
+check("un joueur ne se déclare pas démasqué pour sortir des suspects", async () => {
+  await baseGame({ phase: 'jeu', day: 1, roundStatus: 'open' });
+  await seedSecret(ALICE, 's-alice', 'Un secret bien à moi, assez long.');
+  await assertFails(updateDoc(doc(as(ALICE), 'players', ALICE), { revealed: true }));
+  await assertFails(updateDoc(doc(as(BRUNO), 'players', ALICE), { revealed: true }));
+  await assertSucceeds(updateDoc(doc(as(ANIM), 'players', ALICE), { revealed: true }));
 });
 
 /* ═════════════════════════════════════════════════════ les secrets ═══ */
@@ -242,25 +286,48 @@ check("un joueur ne publie pas de faux résultats ni de faux scores", async () =
   await assertSucceeds(getDoc(doc(as(ALICE), 'scores/state')));
 });
 
-check("le rôle d'animateur ne se prend qu'une fois", async () => {
+check("le rôle d'animateur ne se réclame pas, même quand il n'y en a aucun", async () => {
+  // Une base toute neuve : personne n'est animateur. C'est le cas le plus
+  // dangereux — si le rôle se prenait d'un clic, le premier stagiaire
+  // curieux verrait tous les secrets.
   await seed(async (db) => {
     await setDoc(doc(db, 'game/state'), { phase: 'lobby', day: 0, roundStatus: null, pointsCorrect: 3, pointsWrong: 1 });
+    await setDoc(doc(db, 'players', ALICE), { name: 'Alice', nameKey: 'alice' });
   });
-  const alice = as(ALICE);
-  const first = writeBatch(alice);
-  first.set(doc(alice, 'admins', ALICE), { since: 1 });
-  first.set(doc(alice, 'adminLock/lock'), { claimed: true });
-  await assertSucceeds(first.commit());
+  await assertFails(setDoc(doc(as(ALICE), 'admins', ALICE), { since: 1 }));
+  await assertFails(setDoc(doc(as(ALICE), 'admins', BRUNO), { since: 1 }));
+});
 
-  const bruno = as(BRUNO);
-  const second = writeBatch(bruno);
-  second.set(doc(bruno, 'admins', BRUNO), { since: 2 });
-  second.set(doc(bruno, 'adminLock/lock'), { claimed: true });
-  await assertFails(second.commit());
+check("un animateur en nomme un autre, mais jamais lui-même", async () => {
+  await baseGame();
+  const anim = as(ANIM);
+  await assertFails(setDoc(doc(as(ALICE), 'admins', ALICE), { since: 1 }));  // se voler le rôle
+  await assertSucceeds(setDoc(doc(anim, 'admins', ALICE), { since: 1 }));
+  // Alice, devenue animatrice, voit alors ce qui était fermé.
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
+  await assertSucceeds(getDoc(doc(as(ALICE), 'authorOf/s-bruno')));
+});
 
-  // et on ne se retire pas le verrou pour recommencer
-  await assertFails(deleteDoc(doc(bruno, 'adminLock/lock')));
-  await assertFails(deleteDoc(doc(alice, 'admins', ALICE)));
+check("on ne nomme pas animateur un compte qui n'existe pas", async () => {
+  await baseGame();
+  await assertFails(setDoc(doc(as(ANIM), 'admins', 'uid-fantome'), { since: 1 }));
+});
+
+check("un animateur retire le rôle à un autre, jamais à lui-même", async () => {
+  await baseGame();
+  await seed(async (db) => { await setDoc(doc(db, 'admins', ALICE), { since: 1 }); });
+  // Se révoquer soi-même laisserait la partie sans personne aux commandes.
+  await assertFails(deleteDoc(doc(as(ALICE), 'admins', ALICE)));
+  await assertFails(deleteDoc(doc(as(BRUNO), 'admins', ALICE)));   // un stagiaire, encore moins
+  await assertSucceeds(deleteDoc(doc(as(ANIM), 'admins', ALICE)));
+  // et une fois révoquée, Alice ne lit plus rien de caché
+  await seedSecret(BRUNO, 's-bruno', 'Le secret de Bruno, bien assez long.');
+  await assertFails(getDoc(doc(as(ALICE), 'authorOf/s-bruno')));
+});
+
+check("le rôle d'animateur ne se modifie pas en douce", async () => {
+  await baseGame();
+  await assertFails(updateDoc(doc(as(ANIM), 'admins', ANIM), { since: 2 }));
 });
 
 check("on ne s'inscrit pas sous l'identité d'un autre", async () => {
