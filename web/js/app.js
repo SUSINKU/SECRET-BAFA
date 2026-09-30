@@ -648,14 +648,19 @@ document.addEventListener('focusout', () => {
 function renderBrand() {
   const name = game().gameName;
   const brand = clear($('brand'));
-  if (name === DEFAULT_GAME.gameName) {
-    const mark = el('span', 'wordmark');
-    mark.setAttribute('role', 'img');
-    mark.setAttribute('aria-label', 'Secret BAFA');
-    brand.appendChild(mark);
-  } else {
-    brand.appendChild(el('span', 'brand__text', name));
-  }
+  // Sur l'écran de connexion, le logo s'affiche déjà en grand juste dessous :
+  // le répéter dans le bandeau ne dirait rien de plus.
+  if (!S.user) return;
+  brand.appendChild(name === DEFAULT_GAME.gameName ? logoImage('wordmark') : el('span', 'brand__text', name));
+}
+
+function logoImage(cls) {
+  const img = document.createElement('img');
+  img.className = cls;
+  img.src = 'images/logo-secret-bafa.webp';
+  img.alt = 'Secret BAFA';
+  img.width = 560; img.height = 321;   // évite que la page sursaute au chargement
+  return img;
 }
 
 function phaseText() {
@@ -793,12 +798,7 @@ function renderAuth() {
   const screen = clear($('screen'));
 
   const brand = el('div', 'hero__logo');
-  const box = el('div', 'brandcard');
-  const logo = el('div', 'wordmark big');
-  logo.setAttribute('role', 'img');
-  logo.setAttribute('aria-label', 'Secret BAFA');
-  box.appendChild(logo);
-  brand.appendChild(box);
+  brand.appendChild(logoImage('wordmark big'));
   screen.appendChild(brand);
 
   const rules = el('div', 'card');

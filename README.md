@@ -182,7 +182,7 @@ web/                 l'application — c'est tout le jeu
   js/config.js       le seul fichier à remplir
   js/firebase.js     le SDK Firebase, embarqué (aucun appel à un CDN)
   css/, fonts/       la charte : dégradé, Poppins hébergée en local
-  images/            le logo en pochoir, colorié par le CSS, et les icônes
+  images/            le logo détouré et les icônes d'application
 firestore.rules      qui a le droit de lire et d'écrire quoi
 firebase.json        hébergement et émulateurs
 netlify.toml         de quoi publier sur Netlify si tu changes d'avis

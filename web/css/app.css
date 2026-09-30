@@ -41,18 +41,15 @@ p { margin:8px 0; }
 .brand { display:flex; align-items:center; min-height:34px; }
 .brand__text { font-weight:800; font-size:1.05rem; letter-spacing:-.01em; overflow-wrap:anywhere; }
 
-/* Le logo est une image en niveaux de gris utilisée comme pochoir : le CSS
-   décide de sa couleur. Un seul fichier sert donc au bandeau (en blanc) et
-   aux cartes claires (en encre), et il ne se déforme jamais — le rapport
-   largeur/hauteur est celui du dessin. */
+/* Le logo est un autocollant : il porte sa propre bulle violette et ses
+   éclats. On ne le recolorie pas, on ne l'enferme pas dans un cadre — on lui
+   donne de la place et une ombre portée, pour qu'il se détache aussi bien du
+   dégradé de l'en-tête que du fond clair des pages. */
 .wordmark {
-  display:block; flex:0 0 auto; width:132px; aspect-ratio:480/303; background:currentColor;
-  -webkit-mask:url(../images/logo-mark.png) center/contain no-repeat;
-          mask:url(../images/logo-mark.png) center/contain no-repeat;
+  display:block; flex:0 0 auto; width:150px; height:auto;
+  filter:drop-shadow(0 4px 12px rgba(52,16,82,.30));
 }
-/* Dans la carte d'accueil, le logo doit porter la largeur : sans dimension
-   propre, la carte qui l'entoure s'effondre sur elle-même. */
-.wordmark.big { width:216px; max-width:100%; margin:0 auto; color:var(--encre); }
+.wordmark.big { width:100%; max-width:264px; filter:drop-shadow(0 10px 24px rgba(80,40,120,.22)); }
 .hero__pill {
   display:inline-block; margin-top:14px; padding:6px 15px; border-radius:999px;
   background:rgba(255,255,255,.22); font-size:.78rem; font-weight:600; letter-spacing:.01em;
@@ -251,13 +248,7 @@ footer { text-align:center; color:var(--muted); font-size:.8rem; padding:6px 16p
 }
 
 /* ═══════════════════════════ propres à la version serveur ═════════════ */
-.brandcard {
-  background:var(--blanc); border-radius:24px; padding:18px 22px; margin:0 auto 4px;
-  max-width:260px; box-shadow:var(--ombre-forte);
-}
-.brandcard img { display:block; width:100%; height:auto; }
-
-.hero__logo { display:flex; justify-content:center; padding-top:6px; }
+.hero__logo { display:flex; justify-content:center; padding:10px 0 2px; }
 
 .linkline { text-align:center; margin-top:18px; }
 .linkline button {
