@@ -78,14 +78,29 @@ Retourne ensuite dans Firebase : **Authentication → Settings → Domaines
 autorisés** → ajoute le domaine de ta page (`ton-nom.github.io`), sinon la
 connexion sera refusée.
 
-### 4. Te nommer animateur — une seule fois, dans la console
+### 4. Créer le compte de pilotage, et le nommer
+
+Le jeu a deux sortes d'entrées, côte à côte sur l'écran d'accueil :
+
+- **Inscription / Connexion** — les stagiaires, avec pour identifiant leur
+  prénom et l'initiale de leur nom (`Adrien.M`), ce qui les distingue des
+  autres Adrien du groupe, plus un mot de passe simple.
+- **Admin** — un compte unique, d'identifiant `Admin`, réservé : personne ne
+  peut s'inscrire sous ce nom. Il ne joue pas — pas de secret à déposer, pas de
+  place au classement, et personne ne peut l'accuser.
 
 Le rôle d'animateur **ne se réclame pas depuis l'application**. S'il suffisait
 de cliquer, le premier stagiaire curieux verrait tous les secrets. Il s'inscrit
 une fois dans la console Firebase, qui n'appartient qu'à toi.
 
-1. Ouvre l'application, crée ton compte, va dans l'onglet **Admin** :
-   la page affiche **ton identifiant**, avec un bouton *Copier*.
+**Fais-le avant de donner le lien au groupe.** Tant que le compte `Admin`
+n'existe pas, n'importe qui pourrait le créer — il n'en tirerait aucun droit,
+puisque les pouvoirs viennent de l'étape ci-dessous, mais il t'aurait pris
+l'identifiant.
+
+1. Ouvre l'application, onglet **Admin** → *Première fois ? Créer le compte
+   Admin* → choisis son mot de passe. La page affiche alors **ton
+   identifiant**, avec un bouton *Copier*.
 2. Console Firebase → **Firestore Database → Données** → *Démarrer une
    collection*, nommée exactement **`admins`**.
 3. Comme **ID du document**, colle ton identifiant. Ajoute un champ `since`, de
@@ -97,6 +112,12 @@ Ensuite, tu peux **nommer un second animateur directement depuis la page**
 (onglet *Admin → Participants →* fiche de la personne), et lui retirer ce
 droit. Tu ne peux pas te le retirer à toi-même : c'est ce qui garantit qu'une
 partie ne se retrouve jamais sans personne aux commandes.
+
+Un mot sur le mot de passe du compte `Admin` : il n'est écrit nulle part dans
+le dépôt, et il ne doit pas l'être — le code est public. Choisis-en un que tes
+stagiaires ne devineront pas. Ce compte lit **tous les secrets, leurs auteurs
+et tous les votes avant le reveal** : quelqu'un qui y entrerait ne gagnerait
+pas la partie, il la viderait de son intérêt.
 
 ## L'espace admin
 
