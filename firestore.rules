@@ -25,9 +25,15 @@ service cloud.firestore {
     function authorOf(secretId) {
       return get(/databases/$(database)/documents/authorOf/$(secretId)).data.uid;
     }
+    function secret(secretId) {
+      return get(/databases/$(database)/documents/secrets/$(secretId)).data;
+    }
+    function player(playerId) {
+      return get(/databases/$(database)/documents/players/$(playerId)).data;
+    }
 
     // ── État de la partie ───────────────────────────────────────────────
-    // Lisible par tous les joueurs, piloté par le seul animateur. Le tout
+    // Lisible par tous les joueurs, piloté par les seuls animateurs. Le tout
     // premier joueur a le droit de le créer, mais uniquement vierge.
     match /game/state {
       allow read: if signedIn();
@@ -51,6 +57,9 @@ service cloud.firestore {
                     && playerId == uid()
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hasSecret'])
                     && request.resource.data.hasSecret == true;
+      // `revealed` : l'animateur lève ce drapeau quand le secret de cette
+      // personne est démasqué. Il sort alors de la liste des suspects, et les
+      // règles de vote ci-dessous refusent qu'on l'accuse encore.
       allow update, delete: if isAdmin();
     }
 
@@ -95,6 +104,11 @@ service cloud.firestore {
     // ── Votes ──────────────────────────────────────────────────────────
     // Scellés : tu ne relis que le tien. L'identifiant du document est
     // « jour_utilisateur », ce qui interdit mécaniquement le second vote.
+    //
+    // Les trois interdits du jeu sont vérifiés ici, pas seulement dans la
+    // page : on ne vote pas sur son propre secret, on ne s'accuse pas
+    // soi-même, et on n'accuse pas quelqu'un déjà démasqué — pas plus qu'on
+    // ne vote sur un secret déjà sorti du jeu.
     match /votes/{voteId} {
       allow read: if isAdmin() || (signedIn() && resource.data.voter == uid());
       allow create: if signedIn()
@@ -103,8 +117,11 @@ service cloud.firestore {
                     && request.resource.data.day == game().day
                     && game().roundStatus == 'open'
                     && game().phase == 'jeu'
+                    && exists(/databases/$(database)/documents/mine/$(uid()))
                     && request.resource.data.guess != uid()
-                    && authorOf(request.resource.data.secretId) != uid();
+                    && authorOf(request.resource.data.secretId) != uid()
+                    && secret(request.resource.data.secretId).get('solvedDay', null) == null
+                    && player(request.resource.data.guess).get('revealed', false) == false;
       allow update: if false;
       allow delete: if isAdmin();
     }
@@ -120,20 +137,22 @@ service cloud.firestore {
     }
 
     // ── Le rôle d'animateur ────────────────────────────────────────────
-    // Le premier qui le réclame le prend, et le verrou se referme :
-    // il n'y a jamais de second animateur.
+    // Il ne se réclame pas : il se donne. Le tout premier animateur est
+    // inscrit à la main dans la console Firebase — la console écrit sous
+    // l'identité du projet et ne passe pas par ces règles, donc personne ne
+    // peut le faire depuis l'application. Ensuite, un animateur peut en
+    // nommer un autre, et lui retirer ce droit.
+    //
+    // Deux verrous : on ne se nomme jamais soi-même (sinon le rôle se vole),
+    // et on ne se révoque jamais soi-même (sinon un clic malheureux laisse la
+    // partie sans personne aux commandes).
     match /admins/{playerId} {
       allow read: if signedIn();
-      allow create: if signedIn()
-                    && playerId == uid()
-                    && !exists(/databases/$(database)/documents/adminLock/lock)
-                    && getAfter(/databases/$(database)/documents/adminLock/lock).data.claimed == true;
-      allow update, delete: if false;
-    }
-    match /adminLock/lock {
-      allow read: if signedIn();
-      allow create: if signedIn() && !exists(/databases/$(database)/documents/adminLock/lock);
-      allow update, delete: if false;
+      allow create: if isAdmin()
+                    && playerId != uid()
+                    && exists(/databases/$(database)/documents/players/$(playerId));
+      allow delete: if isAdmin() && playerId != uid();
+      allow update: if false;
     }
 
     // Tout le reste est fermé.

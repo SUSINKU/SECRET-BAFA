@@ -6,8 +6,9 @@
 <title>Secret BAFA</title>
 <meta name="description" content="Le jeu des secrets pour les formations BAFA : un secret par stagiaire, un vote par jour, un reveal le soir.">
 <meta name="theme-color" content="#8B5CF6">
-<link rel="icon" href="images/logo-secret-bafa.png">
-<link rel="apple-touch-icon" href="images/logo-secret-bafa.png">
+<link rel="icon" href="images/icone-180.png" sizes="180x180">
+<link rel="apple-touch-icon" href="images/icone-180.png">
+<link rel="manifest" href="manifest.webmanifest">
 <link rel="preload" as="font" type="font/woff2" href="fonts/poppins-800-latin.woff2" crossorigin>
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/app.css">
@@ -17,16 +18,16 @@
 <header class="hero" id="hero">
   <div class="hero__blobs" aria-hidden="true"><i></i><i></i></div>
   <div class="hero__inner">
-    <div class="brand">
-      <span class="brand__mark">🤫</span>
-      <span id="gameName">Secret BAFA</span>
-    </div>
+    <div class="brand" id="brand"></div>
     <div class="hero__pill" id="statusLine">Connexion…</div>
     <h1 id="heroTitle"></h1>
     <p class="hero__sub" id="heroSub"></p>
     <div class="hero__stats" id="heroStats"></div>
     <div class="progress hidden" id="heroProgress">
-      <div class="progress__track"><div class="progress__fill" id="progressFill" style="width:0%"></div></div>
+      <div class="progress__track">
+        <div class="progress__fill" id="progressFill" style="width:0%"></div>
+        <div class="progress__ticks" id="progressTicks" aria-hidden="true"></div>
+      </div>
       <div class="progress__label" id="progressLabel"></div>
     </div>
   </div>

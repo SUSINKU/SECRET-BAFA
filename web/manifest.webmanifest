@@ -1,0 +1,16 @@
+{
+  "name": "Secret BAFA",
+  "short_name": "Secret BAFA",
+  "description": "Le jeu des secrets des formations BAFA : un secret par stagiaire, un vote par jour, un reveal le soir.",
+  "lang": "fr",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F7F4FB",
+  "theme_color": "#8B5CF6",
+  "icons": [
+    { "src": "images/icone-180.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "images/icone-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
