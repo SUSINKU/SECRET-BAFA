@@ -11,13 +11,12 @@
 // ═══════════════════════════════════════════════════════════════════════
 
 const firebaseConfig = {
-  apiKey: "AIzaSyBs3uMkDmhPGOtTDP-scxWRw6B_EQ5P87Y",
-  authDomain: "secret-bafa-7ba35.firebaseapp.com",
-  projectId: "secret-bafa-7ba35",
-  storageBucket: "secret-bafa-7ba35.firebasestorage.app",
-  messagingSenderId: "129771006978",
-  appId: "1:129771006978:web:7684e9ce1ed4969b180b1b",
-  measurementId: "G-BHGB1T89FB"
+  apiKey: "AIzaSyCjL5Gtv5rEX3GNQP62_-NNi9mz2Ag__pA",
+  authDomain: "secretbafa.firebaseapp.com",
+  projectId: "secretbafa",
+  storageBucket: "secretbafa.firebasestorage.app",
+  messagingSenderId: "230853647850",
+  appId: "1:230853647850:web:7e2573325ad8f6e2632693"
 };
 
 // ─────────────── ne touche pas à ce qui suit ───────────────
