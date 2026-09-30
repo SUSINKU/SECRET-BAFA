@@ -278,6 +278,11 @@ footer { text-align:center; color:var(--muted); font-size:.8rem; padding:6px 16p
   background:transparent; color:var(--encre-douce); transition:background .16s, color .16s;
 }
 .segments button[aria-selected="true"] { background:var(--voile); color:var(--indigo); }
+/* Posé à l'intérieur d'une carte blanche, le sélecteur s'inverse : c'est lui
+   qui se creuse, plutôt que de flotter une seconde fois. */
+.segments.inset { background:var(--sol); box-shadow:none; margin-top:0; }
+.segments.inset button[aria-selected="true"] { background:var(--blanc); color:var(--indigo);
+  box-shadow:0 2px 8px rgba(80,40,120,.12); }
 
 /* Des étiquettes de prénoms : « qui n'a pas encore voté », l'équipe d'animation. */
 .chips { display:flex; flex-wrap:wrap; gap:7px; margin-top:10px; }

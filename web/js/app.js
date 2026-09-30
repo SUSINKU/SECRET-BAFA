@@ -801,6 +801,76 @@ function renderAuth() {
   brand.appendChild(logoImage('wordmark big'));
   screen.appendChild(brand);
 
+  // ── Entrer dans la partie ────────────────────────────────────────────
+  // D'abord le logo, puis de quoi entrer, et seulement ensuite les règles :
+  // un stagiaire qui revient le troisième jour ne veut pas relire la notice
+  // avant d'atteindre son mot de passe.
+  const card = el('div', 'card');
+  const switcher = el('div', 'segments inset');
+  const modes = [
+    ['register', 'Inscription'],
+    ['login', 'Connexion'],
+    ['admin', 'Admin'],
+  ];
+  const buttons = new Map();
+  for (const [id, label] of modes) {
+    const button = el('button', null, label);
+    button.type = 'button';
+    button.onclick = () => { S.authMode = id; paint(); };
+    buttons.set(id, button);
+    switcher.appendChild(button);
+  }
+  card.appendChild(switcher);
+
+  const form = el('form');
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text'; nameInput.autocomplete = 'username'; nameInput.placeholder = 'Camille';
+  nameInput.required = true;
+  const passInput = document.createElement('input');
+  passInput.type = 'password'; passInput.required = true;
+  const hint = el('p', 'muted', '');
+  const submit = el('button', 'btn full', '');
+
+  function paint() {
+    const mode = S.authMode;
+    for (const [id, button] of buttons) button.setAttribute('aria-selected', String(id === mode));
+    submit.textContent = mode === 'register' ? "Je m'inscris"
+      : mode === 'admin' ? 'Entrer au pilotage' : 'Entrer dans la partie';
+    passInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
+    passInput.placeholder = mode === 'register' ? '6 caractères minimum' : '';
+    hint.textContent = mode === 'register'
+      ? "Ce mot de passe sert juste à empêcher un camarade de voter à ta place. N'en réutilise pas un vrai."
+      : mode === 'admin'
+        ? "Connecte-toi avec ton compte : tu arriveras directement sur le poste de commande. Pas encore de compte ? Crée-le d'abord par « Inscription »."
+        : "Reprends le prénom exact choisi à l'inscription.";
+    say('authMsg', '');
+  }
+
+  form.append(el('label', null, 'Ton prénom'), nameInput,
+              el('label', null, 'Ton mot de passe'), passInput, hint, submit);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    submit.disabled = true;
+    say('authMsg', '');
+    // L'onglet d'arrivée se choisit avant la connexion : l'écoute de
+    // l'authentification peut redessiner la page avant que l'attente
+    // ci-dessous ne rende la main.
+    S.view = S.authMode === 'admin' ? 'anim' : 'secret';
+    try {
+      if (S.authMode === 'register') await register(nameInput.value, passInput.value);
+      else await login(nameInput.value, passInput.value);
+    } catch (error) {
+      say('authMsg', error.code ? humanError(error) : error.message);
+      submit.disabled = false;
+    }
+  };
+  card.appendChild(form);
+  const msg = el('div'); msg.id = 'authMsg';
+  card.appendChild(msg);
+  screen.appendChild(card);
+  paint();
+
+  // ── Les règles, sous le formulaire ───────────────────────────────────
   const rules = el('div', 'card');
   rules.appendChild(el('h2', null, 'Comment on joue'));
   const list = el('ol', 'muted');
@@ -814,59 +884,6 @@ function renderAuth() {
   rules.appendChild(list);
   rules.appendChild(el('p', 'muted', 'Un secret démasqué sort du jeu et son auteur est affiché.'));
   screen.appendChild(rules);
-
-  const card = el('div', 'card');
-  const switcher = el('div', 'row');
-  const toLogin = el('button', 'btn small', 'Se connecter');
-  const toRegister = el('button', 'btn small', 'Créer mon compte');
-  toLogin.type = 'button'; toRegister.type = 'button';
-  switcher.append(toLogin, toRegister);
-  card.appendChild(switcher);
-
-  const form = el('form');
-  const nameInput = document.createElement('input');
-  nameInput.type = 'text'; nameInput.autocomplete = 'username'; nameInput.placeholder = 'Camille';
-  nameInput.required = true;
-  const passInput = document.createElement('input');
-  passInput.type = 'password'; passInput.required = true;
-  const hint = el('p', 'muted', '');
-  const submit = el('button', 'btn full', '');
-
-  function paint() {
-    const reg = S.authMode === 'register';
-    toRegister.className = 'btn small' + (reg ? '' : ' ghost');
-    toLogin.className = 'btn small' + (reg ? ' ghost' : '');
-    submit.textContent = reg ? "Je m'inscris" : 'Entrer dans la partie';
-    passInput.autocomplete = reg ? 'new-password' : 'current-password';
-    passInput.placeholder = reg ? '6 caractères minimum' : '';
-    hint.textContent = reg
-      ? "Ce mot de passe sert juste à empêcher un camarade de voter à ta place. N'en réutilise pas un vrai."
-      : "Reprends le prénom exact choisi à l'inscription.";
-    say('authMsg', '');
-  }
-  toLogin.onclick = () => { S.authMode = 'login'; paint(); };
-  toRegister.onclick = () => { S.authMode = 'register'; paint(); };
-
-  form.append(el('label', null, 'Ton prénom'), nameInput,
-              el('label', null, 'Ton mot de passe'), passInput, hint, submit);
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    submit.disabled = true;
-    say('authMsg', '');
-    try {
-      if (S.authMode === 'register') await register(nameInput.value, passInput.value);
-      else await login(nameInput.value, passInput.value);
-      S.view = 'secret';
-    } catch (error) {
-      say('authMsg', error.code ? humanError(error) : error.message);
-      submit.disabled = false;
-    }
-  };
-  card.appendChild(form);
-  const msg = el('div'); msg.id = 'authMsg';
-  card.appendChild(msg);
-  screen.appendChild(card);
-  paint();
 }
 
 /* ────────────────────────────────────────────────────────── mon secret ─ */

@@ -103,14 +103,19 @@ const tab = (page, label) =>
   page.click(`nav.tabs button:text-is(${JSON.stringify(label)})`);
 
 /** Ouvre la page et s'assure d'y être connecté — que la session existe déjà ou non. */
+const ONGLET = { register: 'Inscription', login: 'Connexion', admin: 'Admin' };
+const BOUTON = {
+  register: "Je m'inscris", login: 'Entrer dans la partie', admin: 'Entrer au pilotage',
+};
+
 async function signIn(page, name, mode) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('nav.tabs:not(.hidden), input[autocomplete="username"]', { timeout: 20000 });
   if (await page.$('nav.tabs:not(.hidden)')) return;   // session déjà ouverte
-  await page.click(mode === 'login' ? 'button:text-is("Se connecter")' : 'button:text-is("Créer mon compte")');
+  await page.click(`button:text-is(${JSON.stringify(ONGLET[mode])})`);
   await page.fill('input[autocomplete="username"]', name);
   await page.fill('input[type="password"]', PASSWORD);
-  await page.click(mode === 'login' ? 'button:text-is("Entrer dans la partie")' : 'button:text-is("Je m\'inscris")');
+  await page.click(`button:text-is(${JSON.stringify(BOUTON[mode])})`);
   await page.waitForSelector('nav.tabs:not(.hidden), #authMsg .msg', { timeout: 20000 });
   const failure = await page.$('#authMsg .msg');
   if (failure) throw new Error(name + ' : ' + (await failure.textContent()));
@@ -375,6 +380,20 @@ async function signIn(page, name, mode) {
   assert.strictEqual(solved.length, 1, 'un seul secret démasqué');
   assert.ok(solved[0].includes('Bruno'), 'le secret démasqué est celui de Bruno');
   console.log('  ✓ ' + solved[0]);
+
+  /* ── 10. le bouton « Admin » de l'accueil mène droit au pilotage ────── */
+  // Un onglet neuf, sans session ouverte : c'est le trajet d'un formateur qui
+  // arrive le matin sur son téléphone.
+  const matin = await (await browser.newContext({ viewport: { width: 400, height: 880 } })).newPage();
+  matin.on('dialog', (d) => d.accept());
+  await signIn(matin, 'Alice', 'admin');
+  await matin.waitForSelector('.segments', { timeout: 20000 });
+  const volet = await matin.textContent('.segments button[aria-selected="true"]');
+  assert.strictEqual(volet.trim(), 'Pilotage',
+    "« Admin » doit ouvrir le poste de commande, or on arrive sur : " + volet);
+  assert.ok(await matin.$('text=Tableau de bord'), 'le tableau de bord doit être affiché');
+  await matin.close();
+  console.log('  ✓ « Admin » depuis l\'accueil ouvre directement le poste de commande');
 
   await browser.close();
   if (problems.length) {
