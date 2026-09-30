@@ -103,14 +103,19 @@ const tab = (page, label) =>
   page.click(`nav.tabs button:text-is(${JSON.stringify(label)})`);
 
 /** Ouvre la page et s'assure d'y être connecté — que la session existe déjà ou non. */
+const ONGLET = { register: 'Inscription', login: 'Connexion', admin: 'Admin' };
+const BOUTON = {
+  register: "Je m'inscris", login: 'Entrer dans la partie', admin: 'Entrer au pilotage',
+};
+
 async function signIn(page, name, mode) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('nav.tabs:not(.hidden), input[autocomplete="username"]', { timeout: 20000 });
   if (await page.$('nav.tabs:not(.hidden)')) return;   // session déjà ouverte
-  await page.click(mode === 'login' ? 'button:text-is("Se connecter")' : 'button:text-is("Créer mon compte")');
+  await page.click(`button:text-is(${JSON.stringify(ONGLET[mode])})`);
   await page.fill('input[autocomplete="username"]', name);
   await page.fill('input[type="password"]', PASSWORD);
-  await page.click(mode === 'login' ? 'button:text-is("Entrer dans la partie")' : 'button:text-is("Je m\'inscris")');
+  await page.click(`button:text-is(${JSON.stringify(BOUTON[mode])})`);
   await page.waitForSelector('nav.tabs:not(.hidden), #authMsg .msg', { timeout: 20000 });
   const failure = await page.$('#authMsg .msg');
   if (failure) throw new Error(name + ' : ' + (await failure.textContent()));
@@ -122,7 +127,7 @@ async function signIn(page, name, mode) {
   /* ── 1. le rôle d'animateur ne se réclame pas ──────────────────────── */
   const alice = await pageFor('Alice');
   await signIn(alice, 'Alice', 'register');
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.waitForSelector('.copyline input', { timeout: 20000 });
 
   // Aucun bouton ne permet de s'emparer du rôle : c'est tout l'intérêt.
@@ -151,7 +156,7 @@ async function signIn(page, name, mode) {
   }
 
   /* ── 3. l'animateur voit qui a écrit quoi, et lance ────────────────── */
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.click('.segments button:text-is("Participants")');
   await alice.waitForSelector('.sheet', { timeout: 20000 });
   const codeByName = Object.fromEntries(await alice.$$eval('.sheet', (boxes) =>
@@ -237,7 +242,7 @@ async function signIn(page, name, mode) {
 
   /* ── 5 bis. le poste de commande pendant la journée ────────────────── */
   await signIn(alice, 'Alice', 'login');
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.click('.segments button:text-is("Pilotage")');
   await alice.waitForSelector('.chips .chip', { timeout: 20000 });
 
@@ -276,7 +281,7 @@ async function signIn(page, name, mode) {
   console.log('  ✓ les quatre votes sont bien en base');
 
   /* ── 6. le reveal ─────────────────────────────────────────────────── */
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.click('button:text("Clôturer & révéler")');
   await alice.waitForSelector('#pilotMsg .msg.ok', { timeout: 20000 });
 
@@ -317,7 +322,7 @@ async function signIn(page, name, mode) {
   console.log('  ✓ barème correct : ' + JSON.stringify(points));
 
   /* ── 7 bis. l'animateur ajuste des points à la main ─────────────────── */
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.click('.segments button:text-is("Participants")');
   await alice.click('.sheet__head:has-text("Diego")');
   await alice.waitForSelector('.sheet.open input.tiny', { timeout: 20000 });
@@ -353,7 +358,7 @@ async function signIn(page, name, mode) {
   assert.strictEqual(await peutLireLesAuteurs(bruno, 'Bruno'), false,
     'avant nomination, Bruno ne doit rien lire des auteurs');
 
-  await tab(alice, 'Animateur');
+  await tab(alice, 'Admin');
   await alice.click('.segments button:text-is("Participants")');
   await alice.click('.sheet__head:has-text("Bruno")');
   await alice.waitForSelector('.sheet.open button:text-is("Nommer animateur")', { timeout: 20000 });
@@ -375,6 +380,20 @@ async function signIn(page, name, mode) {
   assert.strictEqual(solved.length, 1, 'un seul secret démasqué');
   assert.ok(solved[0].includes('Bruno'), 'le secret démasqué est celui de Bruno');
   console.log('  ✓ ' + solved[0]);
+
+  /* ── 10. le bouton « Admin » de l'accueil mène droit au pilotage ────── */
+  // Un onglet neuf, sans session ouverte : c'est le trajet d'un formateur qui
+  // arrive le matin sur son téléphone.
+  const matin = await (await browser.newContext({ viewport: { width: 400, height: 880 } })).newPage();
+  matin.on('dialog', (d) => d.accept());
+  await signIn(matin, 'Alice', 'admin');
+  await matin.waitForSelector('.segments', { timeout: 20000 });
+  const volet = await matin.textContent('.segments button[aria-selected="true"]');
+  assert.strictEqual(volet.trim(), 'Pilotage',
+    "« Admin » doit ouvrir le poste de commande, or on arrive sur : " + volet);
+  assert.ok(await matin.$('text=Tableau de bord'), 'le tableau de bord doit être affiché');
+  await matin.close();
+  console.log('  ✓ « Admin » depuis l\'accueil ouvre directement le poste de commande');
 
   await browser.close();
   if (problems.length) {
