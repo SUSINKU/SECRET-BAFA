@@ -111,83 +111,68 @@ const BOUTON = {
 /**
  * Ouvre la page et s'assure d'y être connecté.
  *
- * `mode` vaut 'register' ou 'login' pour un stagiaire, 'admin' pour le compte
- * de pilotage (dont l'identifiant est imposé par la page), et 'creerAdmin'
- * pour la toute première création de ce compte.
+ * `mode` vaut 'register' pour s'inscrire, 'login' pour revenir, et 'admin'
+ * pour entrer par la porte du pilotage — même compte, même mot de passe,
+ * seul l'onglet d'arrivée change.
  */
 async function signIn(page, name, mode) {
   await page.goto(BASE, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('nav.tabs:not(.hidden), input[autocomplete="username"]', { timeout: 20000 });
   if (await page.$('nav.tabs:not(.hidden)')) return;   // session déjà ouverte
-  const creation = mode === 'creerAdmin';
-  await page.click(`button:text-is(${JSON.stringify(ONGLET[creation ? 'admin' : mode])})`);
-  if (!creation && mode !== 'admin') await page.fill('input[autocomplete="username"]', name);
+  await page.click(`button:text-is(${JSON.stringify(ONGLET[mode])})`);
+  await page.fill('input[autocomplete="username"]', name);
   await page.fill('input[type="password"]', PASSWORD);
-  await page.click(creation
-    ? 'button:text-is("Première fois ? Créer le compte Admin")'
-    : `button:text-is(${JSON.stringify(BOUTON[mode])})`);
+  await page.click(`button:text-is(${JSON.stringify(BOUTON[mode])})`);
   await page.waitForSelector('nav.tabs:not(.hidden), #authMsg .msg', { timeout: 20000 });
   const failure = await page.$('#authMsg .msg');
   if (failure) throw new Error(name + ' : ' + (await failure.textContent()));
 }
 
+/** Les onglets visibles dans la barre, tels qu'un joueur les voit. */
+const onglets = (page) => page.$$eval('nav.tabs button', (b) => b.map((x) => x.textContent));
+
 (async () => {
   browser = await chromium.launch();
 
   /* ── 1. le rôle d'animateur ne se réclame pas ──────────────────────── */
-  const anim = await pageFor('Admin');
-  await signIn(anim, 'Admin', 'creerAdmin');
-  await tab(anim, 'Admin');
-  await anim.waitForSelector('.copyline input', { timeout: 20000 });
+  // Alice est une stagiaire comme les autres. Elle recevra les clés en plus,
+  // sans cesser de jouer : c'est le cas réel d'un formateur qui participe.
+  const alice = await pageFor('Alice');
+  const anim = alice;
+  await signIn(alice, 'Alice', 'register');
 
-  // Créer le compte ne donne rien : aucun bouton ne s'empare du rôle.
-  assert.strictEqual(await anim.locator('button:text-is("Devenir animateur")').count(), 0,
-    "aucun bouton ne doit permettre de se nommer animateur soi-même");
-  assert.strictEqual(await anim.locator('button:text("Lancer la partie")').count(), 0,
-    "le compte Admin ne doit rien piloter tant que la console ne l'a pas nommé");
+  // Tant qu'elle n'est pas animatrice, pas d'onglet Admin : rien à y voir.
+  const avant = await onglets(alice);
+  assert.ok(!avant.includes('Admin'),
+    "un stagiaire ne doit pas voir l'onglet Admin, or : " + JSON.stringify(avant));
 
-  const animUid = await anim.inputValue('.copyline input');
-  assert.ok(animUid && animUid.length > 10, "la page doit afficher l'identifiant à recopier");
-
-  // Le formateur le fait une fois dans la console Firebase…
-  await nameAdminFromConsole(animUid);
-  // …et la page bascule toute seule, sans rechargement : le temps réel sert
-  // aussi à ça.
-  await anim.waitForSelector('button:text("Lancer la partie")', { timeout: 20000 });
-  console.log('  ✓ le rôle se donne depuis la console, et la page le voit sans recharger');
-
-  // « Admin » est réservé : un stagiaire ne peut pas s'en emparer.
+  // Entrer par la porte « Admin » ne donne aucun droit — seulement de quoi
+  // lire l'identifiant à recopier dans la console.
   const curieux = await pageFor('curieux');
-  await curieux.goto(BASE, { waitUntil: 'domcontentloaded' });
-  await curieux.waitForSelector('input[autocomplete="username"]', { timeout: 20000 });
-  await curieux.click('button:text-is("Inscription")');
-  await curieux.fill('input[autocomplete="username"]', 'Admin');
-  await curieux.fill('input[type="password"]', PASSWORD);
-  await curieux.click('button:text-is("Je m\'inscris")');
-  await curieux.waitForSelector('#authMsg .msg', { timeout: 20000 });
-  const refus = await curieux.textContent('#authMsg .msg');
-  assert.ok(refus.includes('réservé'), "« Admin » doit être refusé à l'inscription, or : " + refus);
+  await signIn(curieux, 'Alice', 'admin');
+  await curieux.waitForSelector('.copyline input', { timeout: 20000 });
+  assert.strictEqual(await curieux.locator('button:text("Lancer la partie")').count(), 0,
+    'entrer par la porte Admin ne doit rien commander');
   await curieux.close();
-  console.log('  ✓ l\'identifiant Admin est réservé');
+
+  // Le formateur se déclare une fois dans la console Firebase…
+  await nameAdminFromConsole(await uidOf('Alice'));
+  // …et la page d'Alice le voit sans rechargement.
+  await alice.waitForSelector('nav.tabs button:text-is("Admin")', { timeout: 20000 });
+  await tab(alice, 'Admin');
+  await alice.waitForSelector('button:text("Lancer la partie")', { timeout: 20000 });
+  console.log('  ✓ le rôle se donne depuis la console, et la page le voit sans recharger');
 
   /* ── 2. tout le monde s'inscrit et dépose son secret ───────────────── */
   for (const [name, secret] of PLAYERS) {
-    const page = await pageFor(name);
-    await signIn(page, name, 'register');
+    const page = name === 'Alice' ? alice : await pageFor(name);
+    if (name === 'Alice') await tab(page, 'Mon secret');
+    else await signIn(page, name, 'register');
     await page.fill('textarea', secret);
     await page.click('button:text("Déposer mon secret")');
     await page.waitForSelector('#secretMsg .msg.ok', { timeout: 20000 });
-    await page.close();
+    if (name !== 'Alice') await page.close();
   }
-
-  // Un stagiaire n'a pas d'onglet Admin : il n'y verrait rien, et un onglet
-  // qu'on ne peut pas ouvrir intrigue.
-  const temoin = await pageFor('Alice');
-  const ongletsStagiaire = await temoin.$$eval('nav.tabs button', (b) => b.map((x) => x.textContent));
-  assert.ok(!ongletsStagiaire.includes('Admin'),
-    "un stagiaire ne doit pas voir l'onglet Admin, or : " + JSON.stringify(ongletsStagiaire));
-  await temoin.close();
-  console.log('  ✓ pas d\'onglet Admin pour les stagiaires');
 
   /* ── 3. l'animateur voit qui a écrit quoi, et lance ────────────────── */
   await tab(anim, 'Admin');
@@ -201,9 +186,8 @@ async function signIn(page, name, mode) {
               pill ? pill.textContent.replace('Secret ', '') : ''];
     })));
   assert.strictEqual(Object.keys(codeByName).length, 5,
-    'la vue animateur doit lister les 5 stagiaires, et pas le compte de pilotage : ' +
+    'la vue animateur doit lister les 5 joueurs, animatrice comprise : ' +
     JSON.stringify(Object.keys(codeByName)));
-  assert.ok(!('Admin' in codeByName), "le compte de pilotage ne doit pas figurer parmi les participants");
   for (const [name] of PLAYERS) {
     assert.ok(codeByName[name] && codeByName[name].length === 3,
       `l'animateur doit voir le secret de ${name}`);
@@ -309,7 +293,7 @@ async function signIn(page, name, mode) {
     const db = fb.getFirestore(app);
     fb.connectAuthEmulator(auth, 'http://127.0.0.1:9099', { disableWarnings: true });
     fb.connectFirestoreEmulator(db, '127.0.0.1', 8080);
-    await fb.signInWithEmailAndPassword(auth, 'admin@' + ACCOUNT_DOMAIN, password);
+    await fb.signInWithEmailAndPassword(auth, 'alice@' + ACCOUNT_DOMAIN, password);
     const snap = await fb.getDocs(fb.collection(db, 'votes'));
     return snap.docs.map((d) => d.id);
   }, PASSWORD);
@@ -425,7 +409,7 @@ async function signIn(page, name, mode) {
   // arrive le matin sur son téléphone.
   const matin = await (await browser.newContext({ viewport: { width: 400, height: 880 } })).newPage();
   matin.on('dialog', (d) => d.accept());
-  await signIn(matin, 'Admin', 'admin');
+  await signIn(matin, 'Alice', 'admin');
   await matin.waitForSelector('.segments', { timeout: 20000 });
   const volet = await matin.textContent('.segments button[aria-selected="true"]');
   assert.strictEqual(volet.trim(), 'Pilotage',

@@ -64,18 +64,6 @@ function humanError(error) {
   return (error && error.message) || 'Une erreur est survenue.';
 }
 
-/**
- * L'identifiant du compte de pilotage. Il est réservé : personne ne peut
- * s'inscrire sous ce nom. Ce compte ne joue pas — il ne dépose pas de secret,
- * n'apparaît ni dans les suspects ni au classement.
- *
- * Le porter ne donne aucun pouvoir en soi : les droits viennent du document
- * `admins/<identifiant>` créé à la main dans la console Firebase. Quelqu'un
- * qui devinerait le mot de passe entrerait dans un compte vide.
- */
-const ADMIN_NAME = 'Admin';
-const ADMIN_KEY = 'admin';
-
 /* ───────────────────────────────────────────────────────────── état ──── */
 const DEFAULT_GAME = {
   gameName: 'Secret BAFA', phase: 'lobby', day: 0, roundStatus: null,
@@ -100,6 +88,7 @@ const S = {
   ready: false,
   view: 'secret',
   authMode: 'register',
+  cameAsAdmin: false,   // entré par la porte « Admin » de l'écran de connexion
   pick: null,
   pickWho: '',
   resultDay: null,
@@ -120,15 +109,17 @@ const TABS = [
 /**
  * Les onglets qu'on a le droit de voir.
  *
- * L'onglet Admin ne s'affiche que pour les animateurs — et pour le compte de
- * pilotage qui n'a pas encore été déclaré dans la console, sinon il n'aurait
- * aucun moyen de lire l'identifiant qu'on lui demande d'y recopier.
+ * L'onglet Admin ne s'affiche qu'aux animateurs — et à qui vient d'entrer par
+ * la porte « Admin » de l'écran de connexion, même sans en avoir encore les
+ * droits : c'est là qu'il lit l'identifiant qu'on lui demande de recopier
+ * dans la console, et le lui cacher rendrait la toute première mise en place
+ * impossible. Il n'y trouve rien d'autre.
  *
- * Un stagiaire n'y voyait rien d'utile, mais un onglet qu'on ne peut pas
- * ouvrir intrigue, et trente adolescents curieux, ça clique.
+ * Un stagiaire, lui, n'y voyait rien d'utile — mais un onglet qu'on ne peut
+ * pas ouvrir intrigue, et trente adolescents curieux, ça clique.
  */
 const visibleTabs = () =>
-  TABS.filter(([id]) => id !== 'anim' || S.isAdmin || myName() === ADMIN_NAME);
+  TABS.filter(([id]) => id !== 'anim' || S.isAdmin || S.cameAsAdmin);
 
 /* ──────────────────────────────────────────────────── mise en route ──── */
 let db = null;
@@ -204,6 +195,7 @@ async function boot() {
     for (const stop of unsubscribes.splice(0)) stop();
     for (const stop of adminUnsubs.splice(0)) stop();
     S.user = user || null;
+    if (!user) S.cameAsAdmin = false;
     S.isAdmin = false;
     S.admins = new Set();
     S.mySecretId = null;
@@ -329,14 +321,11 @@ function onDbError(error) {
 /* ────────────────────────────────────────────────────────── comptes ──── */
 const emailFor = (name) => `${nameKey(name)}@${ACCOUNT_DOMAIN}`;
 
-async function register(name, password, options = {}) {
+async function register(name, password) {
   const clean = String(name || '').trim().replace(/\s+/g, ' ');
   if (clean.length < 2) throw new Error('Ton identifiant doit faire au moins 2 caractères.');
   if (clean.length > 30) throw new Error('Ton identifiant est trop long (30 caractères maximum).');
   if (!nameKey(clean)) throw new Error("Cet identifiant ne contient aucune lettre utilisable.");
-  if (!options.asAdmin && nameKey(clean) === ADMIN_KEY) {
-    throw new Error("« Admin » est réservé à l'animateur. Prends ton prénom et l'initiale de ton nom.");
-  }
   if (String(password || '').length < 6) throw new Error('Le mot de passe doit faire au moins 6 caractères.');
 
   const credential = await createUserWithEmailAndPassword(auth, emailFor(clean), password);
@@ -857,83 +846,50 @@ function renderAuth() {
   card.appendChild(switcher);
 
   const form = el('form');
-  const nameLabel = el('label', null, 'Ton identifiant');
   const nameInput = document.createElement('input');
   nameInput.type = 'text'; nameInput.autocomplete = 'username'; nameInput.required = true;
+  nameInput.placeholder = 'Adrien.M';
   const passInput = document.createElement('input');
   passInput.type = 'password'; passInput.required = true;
   const hint = el('p', 'muted', '');
   const submit = el('button', 'btn full', '');
 
-  // Première mise en place : le compte de pilotage n'existe pas encore.
-  const createAdmin = el('button', 'linkbtn', 'Première fois ? Créer le compte Admin');
-  createAdmin.type = 'button';
-  const adminLine = el('p', 'linkline');
-  adminLine.appendChild(createAdmin);
-
   function paint() {
     const mode = S.authMode;
-    const isAdmin = mode === 'admin';
     for (const [id, button] of buttons) button.setAttribute('aria-selected', String(id === mode));
-
-    // En mode Admin l'identifiant est imposé : il n'y a qu'un compte de
-    // pilotage, et le laisser libre inviterait à en inventer un second.
-    nameLabel.textContent = isAdmin ? "Identifiant de l'animateur" : 'Ton identifiant';
-    if (isAdmin) nameInput.value = ADMIN_NAME;
-    else if (nameInput.readOnly) nameInput.value = '';   // on quitte le mode Admin
-    nameInput.readOnly = isAdmin;
-    nameInput.placeholder = isAdmin ? ADMIN_NAME : 'Adrien.M';
-
     submit.textContent = mode === 'register' ? "Je m'inscris"
-      : isAdmin ? 'Entrer au pilotage' : 'Entrer dans la partie';
+      : mode === 'admin' ? 'Entrer au pilotage' : 'Entrer dans la partie';
     passInput.autocomplete = mode === 'register' ? 'new-password' : 'current-password';
     passInput.placeholder = mode === 'register' ? '6 caractères minimum' : '';
     hint.textContent = mode === 'register'
       ? "Ton prénom et l'initiale de ton nom, par exemple « Adrien.M » : c'est ce qui te distingue des autres Adrien du groupe. Le mot de passe sert juste à empêcher un camarade de voter à ta place — n'en réutilise pas un vrai."
-      : isAdmin
-        ? "Le compte de pilotage. Il ne joue pas : pas de secret à déposer, et personne ne peut t'accuser."
+      : mode === 'admin'
+        ? "Réservé à l'animateur : même identifiant, même mot de passe que pour jouer, mais tu arrives directement sur le poste de commande."
         : "Reprends l'identifiant exact choisi à l'inscription.";
-    adminLine.classList.toggle('hidden', !isAdmin);
     say('authMsg', '');
   }
 
-  async function enter(action) {
+  form.append(el('label', null, 'Ton identifiant'), nameInput,
+              el('label', null, 'Ton mot de passe'), passInput, hint, submit);
+  form.onsubmit = async (event) => {
+    event.preventDefault();
     submit.disabled = true;
-    createAdmin.disabled = true;
     say('authMsg', '');
     // L'onglet d'arrivée se choisit avant la connexion : l'écoute de
     // l'authentification peut redessiner la page avant que l'attente
     // ci-dessous ne rende la main.
-    S.view = S.authMode === 'admin' ? 'anim' : 'secret';
+    S.cameAsAdmin = S.authMode === 'admin';
+    S.view = S.cameAsAdmin ? 'anim' : 'secret';
     try {
-      await action();
+      if (S.authMode === 'register') await register(nameInput.value, passInput.value);
+      else await login(nameInput.value, passInput.value);
     } catch (error) {
       say('authMsg', error.code ? humanError(error) : error.message);
       submit.disabled = false;
-      createAdmin.disabled = false;
     }
-  }
-
-  form.append(nameLabel, nameInput, el('label', null, 'Ton mot de passe'), passInput, hint, submit);
-  form.onsubmit = (event) => {
-    event.preventDefault();
-    const name = nameInput.value;
-    const pass = passInput.value;
-    enter(() => (S.authMode === 'register' ? register(name, pass) : login(name, pass)));
   };
-  createAdmin.onclick = () => enter(async () => {
-    try {
-      await register(ADMIN_NAME, passInput.value, { asAdmin: true });
-    } catch (error) {
-      if (String(error.code || '').includes('email-already-in-use')) {
-        throw new Error('Le compte Admin existe déjà : entre son mot de passe et connecte-toi.');
-      }
-      throw error;
-    }
-  });
 
   card.appendChild(form);
-  card.appendChild(adminLine);
   const msg = el('div'); msg.id = 'authMsg';
   card.appendChild(msg);
   screen.appendChild(card);
@@ -1299,7 +1255,7 @@ function renderAdminBootstrap(screen) {
       "Si tu es le formateur et que tu devrais en faire partie, demande à un animateur de te nommer depuis sa page : c'est instantané."));
   } else {
     card.appendChild(el('p', 'muted',
-      "Personne ne pilote encore cette partie. Le rôle d'animateur ne se réclame pas d'un clic — sinon le premier stagiaire curieux verrait tous les secrets. Il s'inscrit une fois dans la console Firebase, qui n'appartient qu'à toi."));
+      "Personne ne pilote encore cette partie. Le rôle d'animateur ne se réclame pas d'un clic — sinon le premier stagiaire curieux verrait tous les secrets. Il s'inscrit une fois dans la console Firebase, qui n'appartient qu'à toi. Tu restes un joueur comme les autres : tu gardes ton secret, tes votes et ta place au classement."));
   }
 
   card.appendChild(el('h3', null, 'Ton identifiant'));
@@ -1330,20 +1286,11 @@ function renderAdminBootstrap(screen) {
 
 /* ── le tableau de bord ────────────────────────────────────────────────── */
 
-/**
- * Un compte de pilotage n'est pas un joueur : il ne dépose pas de secret et
- * ne vote pas. Le compter fausserait « 5 secrets déposés sur 6 » et ferait
- * chercher un absent qui n'existe pas.
- *
- * Un stagiaire promu animateur, lui, reste un joueur : il a son secret, il
- * vote, et il faut pouvoir le retrouver dans la liste pour lui retirer le
- * rôle. D'où la nuance : seul un animateur *sans secret* est un pur pilote.
- */
-const estJoueur = (p) => p.hasSecret || !S.admins.has(p.uid);
-
 function adminFacts() {
   const g = game();
-  const joueurs = [...S.players.values()].filter(estJoueur);
+  // Un animateur est un joueur comme les autres : il dépose son secret, il
+  // vote, on peut l'accuser. Il a seulement les clés en plus.
+  const joueurs = [...S.players.values()];
   const withSecret = S.secrets.size;
   const solved = [...S.secrets.values()].filter((s) => s.solvedDay != null).length;
   const votedToday = new Set(S.allVotes.filter((v) => v.day === g.day).map((v) => v.voter));
@@ -1467,8 +1414,7 @@ function renderParticipants(screen) {
   card.appendChild(el('p', 'muted',
     'Toi seul vois les secrets avec leur auteur, pour pouvoir modérer et animer le reveal à voix haute. Touche une fiche pour la déplier.'));
 
-  const people = [...S.players.values()].filter(estJoueur)
-    .sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+  const people = [...S.players.values()].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
   if (!people.length) card.appendChild(el('p', 'muted', 'Personne ne s’est encore inscrit.'));
 
   for (const person of people) {

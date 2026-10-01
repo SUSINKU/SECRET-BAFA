@@ -78,29 +78,24 @@ Retourne ensuite dans Firebase : **Authentication → Settings → Domaines
 autorisés** → ajoute le domaine de ta page (`ton-nom.github.io`), sinon la
 connexion sera refusée.
 
-### 4. Créer le compte de pilotage, et le nommer
+### 4. Te nommer animateur — une seule fois, dans la console
 
-Le jeu a deux sortes d'entrées, côte à côte sur l'écran d'accueil :
+Il n'y a qu'une sorte de compte : un identifiant — ton prénom et l'initiale de
+ton nom, `Adrien.M`, ce qui te distingue des autres Adrien du groupe — et un
+mot de passe simple. **L'animateur est un joueur comme les autres**, avec les
+clés en plus : il dépose son secret, il vote, on peut l'accuser, il figure au
+classement.
 
-- **Inscription / Connexion** — les stagiaires, avec pour identifiant leur
-  prénom et l'initiale de leur nom (`Adrien.M`), ce qui les distingue des
-  autres Adrien du groupe, plus un mot de passe simple.
-- **Admin** — un compte unique, d'identifiant `Admin`, réservé : personne ne
-  peut s'inscrire sous ce nom. Il ne joue pas — pas de secret à déposer, pas de
-  place au classement, et personne ne peut l'accuser.
+L'écran d'accueil offre trois portes : *Inscription*, *Connexion*, et *Admin*
+— cette dernière prend le même identifiant et le même mot de passe, elle fait
+seulement atterrir directement sur le poste de commande.
 
-Le rôle d'animateur **ne se réclame pas depuis l'application**. S'il suffisait
-de cliquer, le premier stagiaire curieux verrait tous les secrets. Il s'inscrit
-une fois dans la console Firebase, qui n'appartient qu'à toi.
+Le rôle **ne se réclame pas depuis l'application**. S'il suffisait de cliquer,
+le premier stagiaire curieux verrait tous les secrets. Il s'inscrit une fois
+dans la console Firebase, qui n'appartient qu'à toi.
 
-**Fais-le avant de donner le lien au groupe.** Tant que le compte `Admin`
-n'existe pas, n'importe qui pourrait le créer — il n'en tirerait aucun droit,
-puisque les pouvoirs viennent de l'étape ci-dessous, mais il t'aurait pris
-l'identifiant.
-
-1. Ouvre l'application, onglet **Admin** → *Première fois ? Créer le compte
-   Admin* → choisis son mot de passe. La page affiche alors **ton
-   identifiant**, avec un bouton *Copier*.
+1. Ouvre l'application, inscris-toi, puis entre par la porte **Admin** : la
+   page affiche **ton identifiant**, avec un bouton *Copier*.
 2. Console Firebase → **Firestore Database → Données** → *Démarrer une
    collection*, nommée exactement **`admins`**.
 3. Comme **ID du document**, colle ton identifiant. Ajoute un champ `since`, de
@@ -113,17 +108,24 @@ Ensuite, tu peux **nommer un second animateur directement depuis la page**
 droit. Tu ne peux pas te le retirer à toi-même : c'est ce qui garantit qu'une
 partie ne se retrouve jamais sans personne aux commandes.
 
-Un mot sur le mot de passe du compte `Admin` : il n'est écrit nulle part dans
-le dépôt, et il ne doit pas l'être — le code est public. Choisis-en un que tes
-stagiaires ne devineront pas. Ce compte lit **tous les secrets, leurs auteurs
-et tous les votes avant le reveal** : quelqu'un qui y entrerait ne gagnerait
-pas la partie, il la viderait de son intérêt.
+Un mot sur ton mot de passe : il n'est écrit nulle part dans le dépôt, et il
+ne doit pas l'être — le code est public. Choisis-en un que tes stagiaires ne
+devineront pas. Ton compte lit **tous les secrets, leurs auteurs et tous les
+votes avant le reveal** : quelqu'un qui y entrerait ne gagnerait pas la partie,
+il la viderait de son intérêt. Et si tu l'oublies, personne ne peut te le
+rendre : les adresses du jeu sont techniques, aucun e-mail de récupération
+n'arrivera jamais.
+
+Enfin, si tu joues en plus d'animer : tu connais toutes les réponses. Ton
+secret peut parfaitement tromper le groupe et te rapporter des points, mais
+tes propres votes n'ont aucun sens — à toi de t'imposer de ne pas voter.
 
 ## L'espace admin
 
 Quatre volets, tous pensés pour être lus d'un téléphone, debout, entre deux
 ateliers. L'onglet s'appelle **Admin** — c'est le lieu ; « animateur » désigne
-la personne qui en a les clés.
+la personne qui en a les clés. Il n'apparaît que pour elle : un stagiaire ne
+le voit pas.
 
 - **Pilotage** — l'état de la partie, les actions (lancer, clôturer, ouvrir la
   journée suivante, terminer), **qui n'a pas encore voté, nommément**, et **les
