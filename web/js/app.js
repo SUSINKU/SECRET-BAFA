@@ -117,6 +117,19 @@ const TABS = [
   ['results', 'Résultats'], ['ranking', 'Classement'], ['anim', 'Admin'],
 ];
 
+/**
+ * Les onglets qu'on a le droit de voir.
+ *
+ * L'onglet Admin ne s'affiche que pour les animateurs — et pour le compte de
+ * pilotage qui n'a pas encore été déclaré dans la console, sinon il n'aurait
+ * aucun moyen de lire l'identifiant qu'on lui demande d'y recopier.
+ *
+ * Un stagiaire n'y voyait rien d'utile, mais un onglet qu'on ne peut pas
+ * ouvrir intrigue, et trente adolescents curieux, ça clique.
+ */
+const visibleTabs = () =>
+  TABS.filter(([id]) => id !== 'anim' || S.isAdmin || myName() === ADMIN_NAME);
+
 /* ──────────────────────────────────────────────────── mise en route ──── */
 let db = null;
 let auth = null;
@@ -698,7 +711,12 @@ function render(force) {
   renderHero();
 
   if (!S.user) { renderTabs(false); return renderAuth(); }
-  if (S.view === 'login' || !TABS.some((t) => t[0] === S.view)) S.view = 'secret';
+  // On valide la vue contre TOUS les onglets, pas seulement les visibles :
+  // à la première peinture qui suit une connexion, ni la liste des animateurs
+  // ni celle des joueurs ne sont encore arrivées, et « Admin » paraîtrait
+  // interdit. On renverrait alors sur « Mon secret » quelqu'un qui vient
+  // justement d'entrer par le pilotage.
+  if (!TABS.some((t) => t[0] === S.view)) S.view = 'secret';
   renderTabs(true);
 
   const screen = clear($('screen'));
@@ -715,7 +733,7 @@ function renderTabs(show) {
   tabs.classList.toggle('hidden', !show);
   clear(tabs);
   if (!show) return;
-  for (const [id, label] of TABS) {
+  for (const [id, label] of visibleTabs()) {
     const button = el('button', null, label);
     button.type = 'button';
     button.setAttribute('aria-selected', String(S.view === id));

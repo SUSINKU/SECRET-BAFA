@@ -180,6 +180,15 @@ async function signIn(page, name, mode) {
     await page.close();
   }
 
+  // Un stagiaire n'a pas d'onglet Admin : il n'y verrait rien, et un onglet
+  // qu'on ne peut pas ouvrir intrigue.
+  const temoin = await pageFor('Alice');
+  const ongletsStagiaire = await temoin.$$eval('nav.tabs button', (b) => b.map((x) => x.textContent));
+  assert.ok(!ongletsStagiaire.includes('Admin'),
+    "un stagiaire ne doit pas voir l'onglet Admin, or : " + JSON.stringify(ongletsStagiaire));
+  await temoin.close();
+  console.log('  ✓ pas d\'onglet Admin pour les stagiaires');
+
   /* ── 3. l'animateur voit qui a écrit quoi, et lance ────────────────── */
   await tab(anim, 'Admin');
   await anim.click('.segments button:text-is("Participants")');
