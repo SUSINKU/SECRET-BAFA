@@ -36,6 +36,15 @@ window.GrandShow = window.GrandShow || {};
     else parent.appendChild(enfant instanceof Node ? enfant : document.createTextNode(String(enfant)));
   }
 
+  /**
+   * Résout un chemin de ressource. Dans la version « fichier unique », les musiques et images sont
+   * embarquées dans la page (window.GRAND_SHOW_ASSETS) ; sinon le chemin est utilisé tel quel.
+   */
+  GS.asset = function (chemin) {
+    const emb = window.GRAND_SHOW_ASSETS;
+    return (emb && chemin && emb[chemin]) || chemin;
+  };
+
   GS.clamp = function (v, min, max) { return Math.min(max, Math.max(min, v)); };
   GS.lerp = function (a, b, t) { return a + (b - a) * t; };
 

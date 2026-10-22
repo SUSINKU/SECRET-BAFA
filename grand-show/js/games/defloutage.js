@@ -27,7 +27,8 @@
       emoji.textContent = manche.emojiSecours;
       img.onload = function () { img.hidden = false; emoji.hidden = true; };
       img.onerror = function () { img.hidden = true; emoji.hidden = false; };
-      if (manche.image) { if (img.getAttribute('src') !== manche.image) img.setAttribute('src', manche.image); else if (img.complete && img.naturalWidth) img.onload(); else if (img.complete) img.onerror(); }
+      const source = GS.asset(manche.image);
+      if (source) { if (img.getAttribute('src') !== source) img.setAttribute('src', source); else if (img.complete && img.naturalWidth) img.onload(); else if (img.complete) img.onerror(); }
       else { img.removeAttribute('src'); emoji.hidden = false; }
     }
     return { interne: interne, charger: charger };

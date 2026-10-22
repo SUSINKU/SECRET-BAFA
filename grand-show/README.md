@@ -3,6 +3,17 @@
 Application 100 % hors ligne (HTML / CSS / JavaScript pur) pour animer 3 équipes d'enfants sur une grande télé :
 tableau des scores, accueil, puis 4 mini-jeux — **Blind Test**, **Défloutage**, **Œil de Lynx**, **Dessin Flash**.
 
+## 0. Le plus simple : `le-grand-show.html` (fichier unique)
+
+**Un seul fichier, tout compris** (interface, jeux, polices, images, musiques d'exemple) : copiez `le-grand-show.html` sur le portable et double-cliquez dessus, rien d'autre à installer, aucune connexion nécessaire.
+
+- **Écran unique** : ouvrez le fichier.
+- **Double écran télé + régie** : ouvrez le fichier, cliquez **« 🖥️ Ouvrir la régie »** (la régie s'ouvre dans une nouvelle fenêtre : c'est le même fichier avec `?regie=1`), puis faites glisser la fenêtre de la télé sur l'écran HDMI et appuyez sur `F`.
+- **Modifier le contenu** : ouvrez le fichier dans VS Code, le bloc `config.js` est au début du fichier, en clair et commenté. Vos propres musiques/images : mettez-les dans un dossier `assets/musiques/` ou `assets/images/` **à côté du fichier** et indiquez leur chemin dans la config (utilisez un nom de fichier différent de ceux intégrés : `manche1.mp3`, `lion.svg`…).
+- **Régénérer le fichier** après avoir modifié les sources du dossier : `python3 outils/construire-html.py`.
+
+Le reste de ce document décrit la version « dossier » (`index.html` + `regie.html`), qui fonctionne exactement de la même façon.
+
 ## 1. Lancer le jeu
 
 ### Écran unique (le plus simple)
@@ -135,12 +146,13 @@ Bonus : le bouton **📁 Charger un MP3** (blind test) remplace la musique d'une
 
 ```
 grand-show/
-├── index.html · regie.html          pages télé et régie
+├── le-grand-show.html               TOUT-EN-UN (généré), à copier sur le portable
+├── index.html · regie.html          pages télé et régie (version dossier)
 ├── config.js                        tout le contenu modifiable
 ├── css/style.css
 ├── js/core/      util, storage, config-check, sound, chrono, sync, state
 ├── js/           ui, scoreboard, hub, podium, app
 ├── js/games/     commun, blindtest, defloutage, lynx-scene, lynx, dessin
 ├── assets/       fonts/ musiques/ images/ CREDITS.md
-└── outils/generer-musiques.py       régénère les musiques d'exemple
+└── outils/       generer-musiques.py (musiques d'exemple) · construire-html.py (fichier unique)
 ```

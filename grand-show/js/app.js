@@ -5,7 +5,17 @@
   const BATTEMENT_MS = 1500;
   const DELAI_PERTE_MS = 4800;
 
-  const role = document.body.dataset.role === 'regie' ? 'regie' : 'tv';
+  // Deux façons de choisir la page : fichiers séparés (data-role) ou fichier unique (?regie dans l'adresse)
+  const paramsUrl = (function () { try { return new URLSearchParams(location.search); } catch (e) { return new URLSearchParams(''); } })();
+  const fichierUnique = document.body.dataset.page === 'unique';
+  const role = (fichierUnique ? paramsUrl.has('regie') : document.body.dataset.role === 'regie') ? 'regie' : 'tv';
+
+  /** Adresse de la page « regie » ou « tele » (le même fichier, avec un paramètre, en version fichier unique). */
+  function urlPage(cible) {
+    const base = location.href.split('#')[0].split('?')[0];
+    if (fichierUnique) return base + (cible === 'regie' ? '?regie=1' : '?affichage=1');
+    return cible === 'regie' ? 'regie.html' : 'index.html?affichage=1';
+  }
   let mode = 'single';
   const sections = {};
   let dernierBattementTele = 0, dernierBattementRegie = 0, teleSonPret = true, teleMode = '';
@@ -27,9 +37,7 @@
 
   function determinerMode() {
     if (role === 'regie') return 'regie';
-    let params = null;
-    try { params = new URLSearchParams(location.search); } catch (e) { params = null; }
-    if (params && params.get('affichage') === '1') { GS.session.ecrire('mode', 'display'); return 'display'; }
+    if (paramsUrl.get('affichage') === '1') { GS.session.ecrire('mode', 'display'); return 'display'; }
     return GS.session.lire('mode', 'single') === 'display' ? 'display' : 'single';
   }
 
@@ -104,12 +112,12 @@
   }
 
   function ouvrirRegie() {
-    const fen = window.open('regie.html', 'grandshow-regie');
+    const fen = window.open(urlPage('regie'), 'grandshow-regie');
     if (!fen) { GS.ui.toast('Fenêtre bloquée : autorisez les fenêtres surgissantes pour ce site.', 5000); return; }
     changerModeEtRecharger('display');
   }
   function ouvrirTele() {
-    const fen = window.open('index.html?affichage=1', 'grandshow-tv');
+    const fen = window.open(urlPage('tele'), 'grandshow-tv');
     if (!fen) GS.ui.toast('Fenêtre bloquée : autorisez les fenêtres surgissantes pour ce site.', 5000);
   }
 

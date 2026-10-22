@@ -26,7 +26,7 @@
   --texte-police: "Nunito", "Segoe UI", system-ui, -apple-system, Arial, sans-serif;
 }
 /* La régie est lue de près, sur un portable : unités un peu plus petites mais confortables */
-body[data-role="regie"] { --u: clamp(5.4px, 0.95vh, 11px); }
+body[data-role="regie"], body[data-mode="regie"] { --u: clamp(5.4px, 0.95vh, 11px); }
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -177,7 +177,7 @@ body[data-mode="display"] .controle, body[data-mode="display"] .controles, body[
 .chrono.bandeau { flex-direction: row; gap: calc(var(--u) * 2); }
 .chrono.bandeau .chrono-nombre { font-size: 7.5vh; min-width: 1.6em; text-align: center; }
 .chrono.bandeau .chrono-barre { height: 3.2vh; flex: 1; }
-.chrono.petit { flex-direction: row; gap: calc(var(--u) * 1.2); min-width: 18em; }
+.chrono.petit { flex-direction: row; gap: calc(var(--u) * 1.2); width: calc(var(--u) * 36); }
 .chrono.petit .chrono-nombre { font-size: calc(var(--u) * 5); min-width: 1.6em; text-align: center; }
 .chrono.petit .chrono-barre { height: calc(var(--u) * 2); flex: 1; }
 .chrono.urgent .chrono-nombre { color: var(--rouge); animation: tremble 0.25s linear infinite; }
@@ -217,9 +217,9 @@ body[data-mode="display"] .controle, body[data-mode="display"] .controles, body[
 .etat-fichier.erreur { color: #ff9aae; }
 .regie-infos { justify-content: space-between; }
 
-body[data-role="regie"] .vue-jeu { padding-top: calc(var(--u) * 1); }
-body[data-role="regie"] .controles-regie { flex: 1; min-height: 0; overflow: auto; justify-content: center; }
-body[data-role="regie"] .vue-jeu:not(#vue-dessin) .controles-regie { max-height: 100%; }
+body[data-mode="regie"] .vue-jeu { padding-top: calc(var(--u) * 1); }
+body[data-mode="regie"] .controles-regie { flex: none; max-height: 100%; overflow: auto; margin-top: auto; margin-bottom: auto; }
+body[data-mode="regie"] #vue-dessin .controles-regie { margin: 0 0 calc(var(--u) * 0.8); }
 
 /* ---------- Jeu 1 : blind test ---------- */
 .jeu-bt { --c: #ff4fd8; }

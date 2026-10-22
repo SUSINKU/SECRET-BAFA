@@ -13,7 +13,7 @@
   function cle(e) { return e.partie + ':' + e.manche; }
   function mancheCourante(e) { return liste(GS.config, e.partie)[e.manche] || liste(GS.config, 0)[0]; }
   function reponseDe(e) { const s = e.surcharges[cle(e)]; return s ? s : mancheCourante(e).reponse; }
-  function urlDe(e) { return blobs[cle(e)] || mancheCourante(e).fichier; }
+  function urlDe(e) { return blobs[cle(e)] || GS.asset(mancheCourante(e).fichier); }
   function debutDe(e) { return blobs[cle(e)] ? 0 : mancheCourante(e).debut; }
 
   GS.sync.sur('bt-mp3', function (d) {
@@ -151,7 +151,7 @@
       function majErreur() {
         if (!messageErreur) return;
         messageErreur.hidden = !(manque && actif);
-        if (manque && dernier) messageErreur.textContent = '🎵 Fichier introuvable : ' + urlDe(dernier).replace(/^blob:.*/, 'MP3 chargé (rechargez-le)');
+        if (manque && dernier) messageErreur.textContent = '🎵 Fichier introuvable : ' + urlDe(dernier).replace(/^(blob|data):.*/, 'MP3 chargé (rechargez-le)');
       }
       function synchroniserAudio() {
         if (!aTele || !dernier) return;

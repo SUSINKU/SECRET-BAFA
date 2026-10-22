@@ -190,7 +190,8 @@
         if (!avecImage) return;
         image.onload = function () { image.hidden = false; erreurImage.hidden = true; };
         image.onerror = function () { image.hidden = true; erreurImage.hidden = false; erreurImage.textContent = '🖼️ Image introuvable : ' + cfgM.image; };
-        if (image.getAttribute('src') !== cfgM.image) image.setAttribute('src', cfgM.image);
+        const source = GS.asset(cfgM.image);
+        if (image.getAttribute('src') !== source) image.setAttribute('src', source);
         else if (image.complete && image.naturalWidth) image.onload();
       }
 
