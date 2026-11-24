@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "auto_retopo_character"
-version = "0.5.0"
+version = "0.6.0"
 name = "Auto Retopo Character"
 tagline = "Retopologie semi-automatique (QuadriFlow) + bake de normales pour personnages"
 maintainer = "SUSINKU"

@@ -233,3 +233,25 @@ def landmarks():
         "eye": _spherify([ex, -1.0, ez]),
         "mouth": _spherify([0.0, -1.0, mz]),
     }
+
+
+def _smooth(a, b, x):
+    """0 si x<=a, 1 si x>=b, transition douce entre les deux (a < b ou a > b)."""
+    if a == b:
+        return 1.0 if x >= b else 0.0
+    s = min(1.0, max(0.0, (x - a) / (b - a)))
+    return s * s * (3 - 2 * s)
+
+
+def fit_weights(verts, hairline=0.45, softness=0.2):
+    """Poids de projection par sommet pour une tete sans cheveux.
+
+    1 = colle a la surface (visage sous la racine des cheveux), 0 = reste lisse (crane,
+    arriere et cotes de la tete). `verts` sont les coordonnees de la sphere unite
+    (visage vers -Y), `hairline` la hauteur Z de la racine des cheveux."""
+    out = []
+    for x, y, z in verts:
+        below_hair = _smooth(hairline + softness, hairline, z)
+        facing_front = _smooth(0.0, -0.3, y)
+        out.append(below_hair * facing_front)
+    return out

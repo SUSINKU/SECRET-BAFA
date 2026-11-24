@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 5, 0),
+    "version": (0, 6, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -96,6 +96,15 @@ class RetopoSettings(PropertyGroup):
     template_head_ratio: FloatProperty(
         name="Hauteur de tete / hauteur totale", default=0.4, min=0.1, max=0.8,
         description="Sert a placer et dimensionner le gabarit automatiquement (chibi ~0.4, realiste ~0.13)",
+    )
+    template_bald: BoolProperty(
+        name="Tete sans cheveux",
+        description="Ne colle que le bas du visage au modele ; le crane reste une forme lisse (ignore les cheveux)",
+        default=False,
+    )
+    template_hairline: FloatProperty(
+        name="Racine des cheveux", default=0.45, min=-0.5, max=0.95,
+        description="Hauteur de la racine des cheveux sur le gabarit (0 = niveau des yeux, 1 = sommet du crane)",
     )
     template_rot_z: FloatProperty(name="Rotation Z (deg)", default=0.0, min=-180.0, max=180.0,
                                   description="Le visage du gabarit regarde vers -Y")
@@ -671,6 +680,12 @@ class RETOPO_OT_face_template(Operator):
             sw.wrap_method = "TARGET_PROJECT"
         except TypeError:
             sw.wrap_method = "NEAREST_SURFACEPOINT"
+        if s.template_bald:
+            vg = obj.vertex_groups.new(name="Fit")
+            for i, w in enumerate(face_template.fit_weights(verts, s.template_hairline)):
+                if w > 0:
+                    vg.add([i], w, "REPLACE")
+            sw.vertex_group = "Fit"
         _select_only(context, obj)
         self.report(
             {"INFO"},
@@ -891,6 +906,9 @@ class RETOPO_PT_panel(Panel):
         box.prop(s, "template_res")
         box.prop(s, "template_head_ratio")
         box.prop(s, "template_rot_z")
+        box.prop(s, "template_bald")
+        if s.template_bald:
+            box.prop(s, "template_hairline")
         box.operator("retopo.auto_face", icon="USER")
         box.operator("retopo.face_template", icon="MESH_MONKEY")
         col = box.column(align=True)
