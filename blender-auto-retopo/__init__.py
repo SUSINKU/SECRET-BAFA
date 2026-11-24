@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 1, 0),
+    "version": (0, 1, 2),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -229,16 +229,23 @@ class RETOPO_OT_run(Operator):
         if s.pre_voxel_size > 0:
             _voxel_remesh(low, s.pre_voxel_size)
 
-        # 3. QuadriFlow (avec nouvel essai apres voxel remesh si echec)
-        ok = self._quadriflow(s)
+        # 3. QuadriFlow : options utilisateur, puis voxel remesh, puis options relachees
+        ok, err = self._quadriflow(s)
         if not ok and s.pre_voxel_size == 0:
             size = max(low.dimensions) / 250.0
             if size > 0:
-                self.report({"INFO"}, f"QuadriFlow a echoue, nouvel essai apres voxel remesh ({size:.4f}).")
+                self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Nouvel essai apres voxel remesh ({size:.4f}).")
                 _voxel_remesh(low, size)
-                ok = self._quadriflow(s)
+                ok, err = self._quadriflow(s)
         if not ok:
-            self.report({"ERROR"}, "QuadriFlow n'a pas abouti meme apres voxel remesh. Essaie d'augmenter 'Voxel pre-remesh' ou de reduire les faces cibles.")
+            self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Nouvel essai avec options relachees.")
+            ok, err = self._quadriflow(s, relaxed=True)
+        if not ok:
+            self.report(
+                {"ERROR"},
+                f"QuadriFlow a echoue : {err} | faces avant : {len(low.data.polygons)}, "
+                f"cible : {s.target_faces}, dimensions : {tuple(round(d, 3) for d in low.dimensions)}",
+            )
             _select_only(context, high)
             bpy.data.objects.remove(low, do_unlink=True)
             return {"CANCELLED"}
@@ -279,21 +286,24 @@ class RETOPO_OT_run(Operator):
         self.report({"INFO"}, f"Retopo terminee : {len(low.data.polygons)} faces ({low.name}).")
         return {"FINISHED"}
 
-    def _quadriflow(self, s):
+    def _quadriflow(self, s, relaxed=False):
+        """Retourne (ok, message_erreur)."""
         try:
             res = bpy.ops.object.quadriflow_remesh(
-                use_mesh_symmetry=s.use_symmetry,
-                use_preserve_sharp=s.preserve_sharp,
-                use_preserve_boundary=s.preserve_boundary,
+                use_mesh_symmetry=False if relaxed else s.use_symmetry,
+                use_preserve_sharp=False if relaxed else s.preserve_sharp,
+                use_preserve_boundary=False if relaxed else s.preserve_boundary,
                 preserve_attributes=False,
                 smooth_normals=s.smooth_normals,
                 mode="FACES",
                 target_faces=s.target_faces,
                 seed=s.seed,
             )
-        except RuntimeError:
-            return False
-        return "FINISHED" in res
+        except Exception as e:  # RuntimeError (erreur rapportee) ou TypeError (API)
+            return False, str(e).strip()
+        if "FINISHED" in res:
+            return True, ""
+        return False, "operateur annule sans message"
 
     def _bake(self, context, high, low, s, out_dir):
         scene = context.scene
