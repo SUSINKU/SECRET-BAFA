@@ -1,0 +1,9 @@
+schema_version = "1.0.0"
+id = "auto_retopo_character"
+version = "0.1.0"
+name = "Auto Retopo Character"
+tagline = "Retopologie semi-automatique (QuadriFlow) + bake de normales pour personnages"
+maintainer = "SUSINKU"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
