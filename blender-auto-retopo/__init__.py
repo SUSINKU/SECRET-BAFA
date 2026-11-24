@@ -13,14 +13,16 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
     "category": "Mesh",
 }
 
+import math
 import os
+import subprocess
 
 import bmesh
 import bpy
@@ -33,7 +35,10 @@ from bpy.props import (
     PointerProperty,
     StringProperty,
 )
-from bpy.types import Operator, Panel, PropertyGroup
+from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
+from mathutils import Vector
+
+from . import face_template
 
 
 # --------------------------------------------------------------------------
@@ -57,6 +62,19 @@ def _apply_preset(self, context):
     self.preserve_boundary = boundary
 
 
+class RetopoPrefs(AddonPreferences):
+    bl_idname = __package__ or __name__
+
+    instant_meshes_path: StringProperty(
+        name="Instant Meshes (executable)",
+        description="Chemin vers 'Instant Meshes.exe' (telechargeable gratuitement). Laisse vide pour seulement exporter",
+        subtype="FILE_PATH",
+    )
+
+    def draw(self, context):
+        self.layout.prop(self, "instant_meshes_path")
+
+
 class PartItem(PropertyGroup):
     group: StringProperty(name="Groupe de sommets")
     density: FloatProperty(
@@ -67,6 +85,20 @@ class PartItem(PropertyGroup):
 
 
 class RetopoSettings(PropertyGroup):
+    im_faces: IntProperty(name="Faces cibles (Instant Meshes)", default=6000, min=100, max=500000)
+    im_crease: FloatProperty(name="Angle d'arete vive", default=0.0, min=0.0, max=180.0,
+                             description="0 = desactive")
+    template_res: EnumProperty(
+        name="Resolution du gabarit",
+        items=[("12", "Legere (~900 faces)", ""), ("24", "Dense (~3500 faces)", "")],
+        default="12",
+    )
+    template_head_ratio: FloatProperty(
+        name="Hauteur de tete / hauteur totale", default=0.4, min=0.1, max=0.8,
+        description="Sert a placer et dimensionner le gabarit automatiquement (chibi ~0.4, realiste ~0.13)",
+    )
+    template_rot_z: FloatProperty(name="Rotation Z (deg)", default=0.0, min=-180.0, max=180.0,
+                                  description="Le visage du gabarit regarde vers -Y")
     split_mode: EnumProperty(
         name="Decoupage",
         items=[
@@ -477,6 +509,219 @@ class RETOPO_OT_run(Operator):
         return None
 
 
+def _resolve_out_dir(op, s):
+    if not bpy.data.is_saved and s.output_dir.startswith("//"):
+        op.report({"ERROR"}, "Sauvegarde le .blend ou choisis un chemin absolu pour le dossier de sortie.")
+        return None
+    d = bpy.path.abspath(s.output_dir)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _mesh_poll(cls, context):
+    o = context.active_object
+    return o is not None and o.type == "MESH" and context.mode == "OBJECT"
+
+
+class RETOPO_OT_instant_meshes(Operator):
+    bl_idname = "retopo.instant_meshes"
+    bl_label = "Exporter / lancer Instant Meshes"
+    bl_description = "Exporte l'objet en OBJ. Si l'executable est configure, lance Instant Meshes et importe le resultat"
+    bl_options = {"REGISTER", "UNDO"}
+    poll = classmethod(_mesh_poll)
+
+    def execute(self, context):
+        s = context.scene.retopo_settings
+        obj = context.active_object
+        out_dir = _resolve_out_dir(self, s)
+        if out_dir is None:
+            return {"CANCELLED"}
+        in_path = os.path.join(out_dir, f"{obj.name}_input.obj")
+        out_path = os.path.join(out_dir, f"{obj.name}_instant.obj")
+        _select_only(context, obj)
+        try:
+            bpy.ops.wm.obj_export(
+                filepath=in_path, export_selected_objects=True, apply_modifiers=True,
+                export_uv=False, export_normals=False, export_materials=False,
+            )
+        except Exception as e:
+            self.report({"ERROR"}, f"Export OBJ impossible : {e}")
+            return {"CANCELLED"}
+
+        prefs = context.preferences.addons[__package__].preferences
+        exe = bpy.path.abspath(prefs.instant_meshes_path) if prefs.instant_meshes_path else ""
+        if not exe or not os.path.isfile(exe):
+            self.report(
+                {"INFO"},
+                f"Exporte : {in_path}. Ouvre-le dans Instant Meshes (trace les guides avec l'outil Orientation), "
+                f"exporte le resultat, puis importe-le dans Blender. (Ou renseigne l'executable dans les preferences de l'add-on.)",
+            )
+            return {"FINISHED"}
+
+        cmd = [exe, in_path, "-o", out_path, "-f", str(s.im_faces), "-d", "-S", "2"]
+        if s.im_crease > 0:
+            cmd += ["-c", str(s.im_crease)]
+        try:
+            subprocess.run(cmd, check=True, timeout=900, capture_output=True)
+        except (subprocess.SubprocessError, OSError) as e:
+            self.report({"ERROR"}, f"Instant Meshes a echoue : {e}")
+            return {"CANCELLED"}
+        if not os.path.isfile(out_path):
+            self.report({"ERROR"}, "Instant Meshes n'a produit aucun fichier.")
+            return {"CANCELLED"}
+        before = set(bpy.data.objects)
+        bpy.ops.wm.obj_import(filepath=out_path)
+        new = [o for o in bpy.data.objects if o not in before]
+        if new:
+            new[0].name = f"{obj.name}_instant"
+            _select_only(context, new[0])
+        self.report({"INFO"}, f"Instant Meshes termine : {out_path}")
+        return {"FINISHED"}
+
+
+class RETOPO_OT_quad_remesher(Operator):
+    bl_idname = "retopo.quad_remesher"
+    bl_label = "Lancer Quad Remesher"
+    bl_description = "Appelle l'add-on Quad Remesher (payant, a installer separement) avec les faces cibles"
+    bl_options = {"REGISTER", "UNDO"}
+    poll = classmethod(_mesh_poll)
+
+    def execute(self, context):
+        s = context.scene.retopo_settings
+        try:
+            if not bpy.ops.qremesher.remesh.poll():
+                raise RuntimeError
+        except Exception:
+            self.report({"ERROR"}, "Quad Remesher n'est pas installe/active. Installe-le, puis relance (ou utilise son panneau).")
+            return {"CANCELLED"}
+        qs = getattr(context.scene, "qremesher", None)
+        if qs is not None:
+            try:
+                qs.target_count = s.target_faces
+            except Exception:
+                pass
+        try:
+            bpy.ops.qremesher.remesh()
+        except Exception as e:
+            self.report({"ERROR"}, f"Quad Remesher : {e}. Lance-le depuis son propre panneau.")
+            return {"CANCELLED"}
+        self.report({"INFO"}, "Quad Remesher lance. Pour les guides, utilise les outils de son panneau.")
+        return {"FINISHED"}
+
+
+class RETOPO_OT_manual_setup(Operator):
+    bl_idname = "retopo.manual_setup"
+    bl_label = "Preparer la retopo manuelle"
+    bl_description = (
+        "Cree un objet de retopo colle sur le modele : symetrie X, Shrinkwrap, accrochage a la surface, outil Poly Build"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+    poll = classmethod(_mesh_poll)
+
+    def execute(self, context):
+        high = context.active_object
+        c = context.scene.cursor.location
+        size = max(high.dimensions) * 0.015
+        verts = [(c.x - size, c.y, c.z - size), (c.x + size, c.y, c.z - size),
+                 (c.x + size, c.y, c.z + size), (c.x - size, c.y, c.z + size)]
+        mesh = bpy.data.meshes.new(f"{high.name}_retopo")
+        mesh.from_pydata(verts, [], [(0, 1, 2, 3)])
+        mesh.update()
+        obj = bpy.data.objects.new(f"{high.name}_retopo", mesh)
+        context.collection.objects.link(obj)
+
+        mir = obj.modifiers.new("Mirror", "MIRROR")
+        mir.use_axis[0] = True
+        mir.use_clip = True
+        mir.show_on_cage = True
+        mir.show_in_editmode = True
+        sw = obj.modifiers.new("Shrinkwrap", "SHRINKWRAP")
+        sw.target = high
+        sw.wrap_method = "NEAREST_SURFACEPOINT"
+        sw.offset = max(high.dimensions) * 0.001
+        sw.show_on_cage = True
+        sw.show_in_editmode = True
+        obj.show_in_front = True
+        obj.show_wire = True
+
+        ts = context.scene.tool_settings
+        ts.use_snap = True
+        for attr in ("snap_elements", "snap_elements_individual"):
+            try:
+                setattr(ts, attr, {"FACE_PROJECT"})
+                break
+            except Exception:
+                continue
+
+        _select_only(context, obj)
+        bpy.ops.object.mode_set(mode="EDIT")
+        try:
+            bpy.ops.wm.tool_set_by_id(name="builtin.poly_build")
+        except Exception:
+            pass
+        self.report({"INFO"}, "Pret : Ctrl+clic pour poser des sommets avec Poly Build ; place d'abord le curseur 3D sur le modele (Shift+clic droit).")
+        return {"FINISHED"}
+
+
+class RETOPO_OT_face_template(Operator):
+    bl_idname = "retopo.face_template"
+    bl_label = "Ajouter le gabarit de visage"
+    bl_description = (
+        "Cree une tete tout en quads avec boucles autour des yeux, de la bouche et des oreilles, "
+        "placee sur le haut de l'objet actif, avec un Shrinkwrap pour l'ajuster"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+    poll = classmethod(_mesh_poll)
+
+    def execute(self, context):
+        s = context.scene.retopo_settings
+        target = context.active_object
+        verts, faces = face_template.build(int(s.template_res))
+        mesh = bpy.data.meshes.new("FaceTemplate")
+        mesh.from_pydata([tuple(v) for v in verts], [], [tuple(f) for f in faces])
+        mesh.update()
+        mesh.use_mirror_x = True
+        for p in mesh.polygons:
+            p.use_smooth = True
+
+        corners = [target.matrix_world @ Vector(c) for c in target.bound_box]
+        xs, ys, zs = [c.x for c in corners], [c.y for c in corners], [c.z for c in corners]
+        height = max(zs) - min(zs)
+        r = s.template_head_ratio * height / 2
+        obj = bpy.data.objects.new(f"{target.name}_facetemplate", mesh)
+        obj.location = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, max(zs) - r)
+        obj.scale = (r, r, r)
+        obj.rotation_euler.z = math.radians(s.template_rot_z)
+        context.collection.objects.link(obj)
+
+        sw = obj.modifiers.new("Fit", "SHRINKWRAP")
+        sw.target = target
+        sw.wrap_method = "NEAREST_SURFACEPOINT"
+        _select_only(context, obj)
+        self.report(
+            {"INFO"},
+            "Gabarit cree. Deplace (G) / redimensionne (S) l'objet pour qu'il recouvre la tete, "
+            "puis clique 'Appliquer l'ajustement'. Affine ensuite yeux et bouche en Edit Mode (edition proportionnelle, O).",
+        )
+        return {"FINISHED"}
+
+
+class RETOPO_OT_template_apply(Operator):
+    bl_idname = "retopo.template_apply"
+    bl_label = "Appliquer l'ajustement"
+    bl_description = "Applique le Shrinkwrap 'Fit' du gabarit actif"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        o = context.active_object
+        return o is not None and o.type == "MESH" and "Fit" in o.modifiers and context.mode == "OBJECT"
+
+    def execute(self, context):
+        bpy.ops.object.modifier_apply(modifier="Fit")
+        return {"FINISHED"}
+
+
 class RETOPO_OT_part_add(Operator):
     bl_idname = "retopo.part_add"
     bl_label = "Ajouter une piece"
@@ -563,8 +808,27 @@ class RETOPO_PT_panel(Panel):
 
         self.layout.operator("retopo.run", icon="MOD_REMESH")
 
+        box = self.layout.box()
+        box.label(text="Outils avec guides (meilleure topologie)")
+        box.prop(s, "im_faces")
+        box.prop(s, "im_crease")
+        box.operator("retopo.instant_meshes", icon="EXPORT")
+        box.operator("retopo.quad_remesher", icon="MOD_REMESH")
 
-classes = (PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
+        box = self.layout.box()
+        box.label(text="Gabarit de visage")
+        box.prop(s, "template_res")
+        box.prop(s, "template_head_ratio")
+        box.prop(s, "template_rot_z")
+        box.operator("retopo.face_template", icon="MESH_MONKEY")
+        box.operator("retopo.template_apply", icon="CHECKMARK")
+
+        box = self.layout.box()
+        box.label(text="Retopo manuelle")
+        box.operator("retopo.manual_setup", icon="SNAP_FACE")
+
+
+classes = (RetopoPrefs, RETOPO_OT_instant_meshes, RETOPO_OT_quad_remesher, RETOPO_OT_manual_setup, RETOPO_OT_face_template, RETOPO_OT_template_apply, PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
 
 
 def register():
