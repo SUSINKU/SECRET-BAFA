@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 1, 2),
+    "version": (0, 1, 3),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -149,6 +149,29 @@ def _clean_mesh(obj, merge_dist):
     obj.data.update()
 
 
+def _mesh_stats(obj):
+    """(aretes non manifold, nombre d'ilots) pour le diagnostic."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    non_manifold = sum(1 for e in bm.edges if len(e.link_faces) != 2)
+    seen, islands = set(), 0
+    for v in bm.verts:
+        if v.index in seen:
+            continue
+        islands += 1
+        stack = [v]
+        seen.add(v.index)
+        while stack:
+            cur = stack.pop()
+            for e in cur.link_edges:
+                o = e.other_vert(cur)
+                if o.index not in seen:
+                    seen.add(o.index)
+                    stack.append(o)
+    bm.free()
+    return non_manifold, islands
+
+
 def _voxel_remesh(obj, size):
     obj.data.remesh_voxel_size = size
     obj.data.remesh_voxel_adaptivity = 0.0
@@ -229,22 +252,26 @@ class RETOPO_OT_run(Operator):
         if s.pre_voxel_size > 0:
             _voxel_remesh(low, s.pre_voxel_size)
 
-        # 3. QuadriFlow : options utilisateur, puis voxel remesh, puis options relachees
+        # 3. QuadriFlow : options utilisateur, puis voxels de plus en plus gros, puis options relachees
         ok, err = self._quadriflow(s)
         if not ok and s.pre_voxel_size == 0:
-            size = max(low.dimensions) / 250.0
-            if size > 0:
-                self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Nouvel essai apres voxel remesh ({size:.4f}).")
+            longest = max(low.dimensions)
+            for div in (250.0, 150.0, 100.0, 60.0):
+                size = longest / div
+                self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Voxel remesh {size:.4f}, nouvel essai.")
                 _voxel_remesh(low, size)
                 ok, err = self._quadriflow(s)
+                if ok:
+                    break
         if not ok:
             self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Nouvel essai avec options relachees.")
             ok, err = self._quadriflow(s, relaxed=True)
         if not ok:
+            nm, isl = _mesh_stats(low)
             self.report(
                 {"ERROR"},
-                f"QuadriFlow a echoue : {err} | faces avant : {len(low.data.polygons)}, "
-                f"cible : {s.target_faces}, dimensions : {tuple(round(d, 3) for d in low.dimensions)}",
+                f"QuadriFlow a echoue : {err} | faces : {len(low.data.polygons)}, cible : {s.target_faces}, "
+                f"aretes non manifold : {nm}, ilots : {isl}",
             )
             _select_only(context, high)
             bpy.data.objects.remove(low, do_unlink=True)
