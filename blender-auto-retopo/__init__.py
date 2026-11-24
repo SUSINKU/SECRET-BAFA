@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 1, 3),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -25,6 +25,7 @@ import os
 import bmesh
 import bpy
 from bpy.props import (
+    CollectionProperty,
     BoolProperty,
     EnumProperty,
     FloatProperty,
@@ -56,7 +57,27 @@ def _apply_preset(self, context):
     self.preserve_boundary = boundary
 
 
+class PartItem(PropertyGroup):
+    group: StringProperty(name="Groupe de sommets")
+    density: FloatProperty(
+        name="Densite",
+        description="Multiplicateur de densite de faces (2 = deux fois plus de faces par m2)",
+        default=1.0, min=0.1, max=20.0,
+    )
+
+
 class RetopoSettings(PropertyGroup):
+    split_mode: EnumProperty(
+        name="Decoupage",
+        items=[
+            ("NONE", "Aucun", "Un seul bloc, densite uniforme"),
+            ("LOOSE", "Pieces separees", "Chaque ilot de geometrie deconnecte devient une piece"),
+            ("GROUPS", "Groupes de sommets", "Une piece par groupe de sommets, avec sa propre densite"),
+        ],
+        default="NONE",
+    )
+    parts: CollectionProperty(type=PartItem)
+    min_part_faces: IntProperty(name="Faces min par piece", default=150, min=20, max=100000)
     preset: EnumProperty(
         name="Preset",
         items=[
@@ -129,7 +150,7 @@ def _select_only(context, obj):
     context.view_layer.objects.active = obj
 
 
-def _clean_mesh(obj, merge_dist):
+def _clean_mesh(obj, merge_dist, fill_holes=True):
     """Fusionne les doublons, supprime la geometrie libre, recalcule les normales, comble les trous."""
     bm = bmesh.new()
     bm.from_mesh(obj.data)
@@ -142,11 +163,60 @@ def _clean_mesh(obj, merge_dist):
     bmesh.ops.delete(bm, geom=loose_verts, context="VERTS")
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
     boundary = [e for e in bm.edges if e.is_boundary]
-    if boundary:
+    if boundary and fill_holes:
         bmesh.ops.holes_fill(bm, edges=boundary, sides=8)
     bm.to_mesh(obj.data)
     bm.free()
     obj.data.update()
+
+
+def _decimate(context, obj, target_faces):
+    """Dernier recours : simplification en triangles vers ~target_faces quads."""
+    _select_only(context, obj)
+    tris = sum(len(p.vertices) - 2 for p in obj.data.polygons)
+    m = obj.modifiers.new("Decimate", "DECIMATE")
+    m.ratio = min(1.0, (target_faces * 2) / max(tris, 1))
+    bpy.ops.object.modifier_apply(modifier=m.name)
+
+
+def _split_parts(context, low, s):
+    """Decoupe `low` en pieces. Retourne [(objet, densite)]."""
+    parts = []
+    _select_only(context, low)
+    if s.split_mode == "LOOSE":
+        before = set(context.view_layer.objects)
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.separate(type="LOOSE")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        parts = [(low, 1.0)] + [(o, 1.0) for o in context.view_layer.objects if o not in before]
+        return parts
+
+    for item in s.parts:
+        vg = low.vertex_groups.get(item.group)
+        if vg is None:
+            continue
+        _select_only(context, low)
+        low.vertex_groups.active_index = vg.index
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_mode(type="VERT")
+        bpy.ops.mesh.select_all(action="DESELECT")
+        bpy.ops.object.vertex_group_select()
+        has = any(v.select for v in bmesh.from_edit_mesh(low.data).verts)
+        before = set(context.view_layer.objects)
+        if has:
+            bpy.ops.mesh.separate(type="SELECTED")
+        bpy.ops.object.mode_set(mode="OBJECT")
+        if has:
+            for o in context.view_layer.objects:
+                if o not in before:
+                    o.name = f"{low.name}_{item.group}"
+                    parts.append((o, item.density))
+    if len(low.data.polygons) > 0:
+        parts.append((low, 1.0))
+    else:
+        bpy.data.objects.remove(low, do_unlink=True)
+    return parts
 
 
 def _mesh_stats(obj):
@@ -247,35 +317,27 @@ class RETOPO_OT_run(Operator):
         # Appliquer l'echelle pour que les distances/QuadriFlow soient coherentes
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
 
-        # 2. nettoyage
-        _clean_mesh(low, s.merge_distance)
-        if s.pre_voxel_size > 0:
-            _voxel_remesh(low, s.pre_voxel_size)
-
-        # 3. QuadriFlow : options utilisateur, puis voxels de plus en plus gros, puis options relachees
-        ok, err = self._quadriflow(s)
-        if not ok and s.pre_voxel_size == 0:
-            longest = max(low.dimensions)
-            for div in (250.0, 150.0, 100.0, 60.0):
-                size = longest / div
-                self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Voxel remesh {size:.4f}, nouvel essai.")
-                _voxel_remesh(low, size)
-                ok, err = self._quadriflow(s)
-                if ok:
-                    break
-        if not ok:
-            self.report({"INFO"}, f"QuadriFlow a echoue ({err}). Nouvel essai avec options relachees.")
-            ok, err = self._quadriflow(s, relaxed=True)
-        if not ok:
-            nm, isl = _mesh_stats(low)
-            self.report(
-                {"ERROR"},
-                f"QuadriFlow a echoue : {err} | faces : {len(low.data.polygons)}, cible : {s.target_faces}, "
-                f"aretes non manifold : {nm}, ilots : {isl}",
-            )
-            _select_only(context, high)
-            bpy.data.objects.remove(low, do_unlink=True)
-            return {"CANCELLED"}
+        # 2-3. nettoyage + retopo (en un bloc, ou piece par piece)
+        if s.split_mode == "NONE":
+            _clean_mesh(low, s.merge_distance)
+            if s.pre_voxel_size > 0:
+                _voxel_remesh(low, s.pre_voxel_size)
+            ok, err = self._remesh_one(context, low, s, s.target_faces)
+            if not ok:
+                nm, isl = _mesh_stats(low)
+                self.report(
+                    {"ERROR"},
+                    f"QuadriFlow a echoue : {err} | faces : {len(low.data.polygons)}, cible : {s.target_faces}, "
+                    f"aretes non manifold : {nm}, ilots : {isl}",
+                )
+                _select_only(context, high)
+                bpy.data.objects.remove(low, do_unlink=True)
+                return {"CANCELLED"}
+        else:
+            low = self._remesh_parts(context, high, low, s)
+            if low is None:
+                _select_only(context, high)
+                return {"CANCELLED"}
 
         # 4. reprojection
         if s.use_shrinkwrap:
@@ -313,7 +375,51 @@ class RETOPO_OT_run(Operator):
         self.report({"INFO"}, f"Retopo terminee : {len(low.data.polygons)} faces ({low.name}).")
         return {"FINISHED"}
 
-    def _quadriflow(self, s, relaxed=False):
+    def _remesh_one(self, context, obj, s, target):
+        """QuadriFlow sur un objet, avec voxels progressifs puis options relachees."""
+        _select_only(context, obj)
+        ok, err = self._quadriflow(s, target)
+        if not ok and (s.pre_voxel_size == 0 or s.split_mode != "NONE"):
+            longest = max(obj.dimensions)
+            for div in (250.0, 150.0, 100.0, 60.0):
+                _voxel_remesh(obj, longest / div)
+                ok, err = self._quadriflow(s, target)
+                if ok:
+                    break
+        if not ok:
+            ok, err = self._quadriflow(s, target, relaxed=True)
+        return ok, err
+
+    def _remesh_parts(self, context, high, low, s):
+        parts = _split_parts(context, low, s)
+        parts = [(o, d) for o, d in parts if len(o.data.polygons) > 0]
+        if not parts:
+            self.report({"ERROR"}, "Aucune piece trouvee : cree des groupes de sommets (Ctrl+G en Edit Mode) et ajoute-les a la liste.")
+            return None
+        for o, _ in parts:
+            _clean_mesh(o, s.merge_distance, fill_holes=False)
+        weights = [sum(p.area for p in o.data.polygons) * d for o, d in parts]
+        total = sum(weights) or 1.0
+        for (o, _), w in zip(parts, weights):
+            target = max(s.min_part_faces, int(s.target_faces * w / total))
+            ok, err = self._remesh_one(context, o, s, target)
+            if not ok:
+                _decimate(context, o, target)
+                self.report({"WARNING"}, f"Piece '{o.name}' : QuadriFlow a echoue ({err}), simplification en triangles a la place.")
+        for ob in context.view_layer.objects:
+            ob.select_set(False)
+        for o, _ in parts:
+            o.select_set(True)
+        context.view_layer.objects.active = parts[0][0]
+        if len(parts) > 1:
+            bpy.ops.object.join()
+        merged = context.view_layer.objects.active
+        merged.name = f"{high.name}_low"
+        merged.data.name = merged.name
+        self.report({"INFO"}, f"{len(parts)} pieces retopologisees. Les jonctions entre pieces ne sont pas soudees : a raccorder a la main.")
+        return merged
+
+    def _quadriflow(self, s, target, relaxed=False):
         """Retourne (ok, message_erreur)."""
         try:
             res = bpy.ops.object.quadriflow_remesh(
@@ -323,7 +429,7 @@ class RETOPO_OT_run(Operator):
                 preserve_attributes=False,
                 smooth_normals=s.smooth_normals,
                 mode="FACES",
-                target_faces=s.target_faces,
+                target_faces=target,
                 seed=s.seed,
             )
         except Exception as e:  # RuntimeError (erreur rapportee) ou TypeError (API)
@@ -371,6 +477,25 @@ class RETOPO_OT_run(Operator):
         return None
 
 
+class RETOPO_OT_part_add(Operator):
+    bl_idname = "retopo.part_add"
+    bl_label = "Ajouter une piece"
+
+    def execute(self, context):
+        context.scene.retopo_settings.parts.add()
+        return {"FINISHED"}
+
+
+class RETOPO_OT_part_remove(Operator):
+    bl_idname = "retopo.part_remove"
+    bl_label = "Retirer la piece"
+    index: IntProperty()
+
+    def execute(self, context):
+        context.scene.retopo_settings.parts.remove(self.index)
+        return {"FINISHED"}
+
+
 # --------------------------------------------------------------------------
 # UI
 # --------------------------------------------------------------------------
@@ -399,6 +524,22 @@ class RETOPO_PT_panel(Panel):
         box.prop(s, "pre_voxel_size")
 
         box = self.layout.box()
+        box.label(text="Pieces et densite")
+        box.prop(s, "split_mode")
+        if s.split_mode != "NONE":
+            box.prop(s, "min_part_faces")
+        if s.split_mode == "GROUPS":
+            obj = context.active_object
+            for i, item in enumerate(s.parts):
+                row = box.row(align=True)
+                row.prop_search(item, "group", obj, "vertex_groups", text="")
+                row.prop(item, "density", text="x")
+                op = row.operator("retopo.part_remove", text="", icon="X")
+                op.index = i
+            box.operator("retopo.part_add", icon="ADD")
+            box.label(text="Le voxel pre-remesh est ignore (il efface les groupes).", icon="INFO")
+
+        box = self.layout.box()
         box.label(text="Projection")
         box.prop(s, "use_shrinkwrap")
         if s.use_shrinkwrap:
@@ -423,7 +564,7 @@ class RETOPO_PT_panel(Panel):
         self.layout.operator("retopo.run", icon="MOD_REMESH")
 
 
-classes = (RetopoSettings, RETOPO_OT_run, RETOPO_PT_panel)
+classes = (PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
 
 
 def register():

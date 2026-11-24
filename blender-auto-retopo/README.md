@@ -10,6 +10,14 @@ Add-on de retopologie semi-automatique pour personnages animés.
 5. UV (Smart UV Project)
 6. Bake de la normal map (tangent space, Cycles) -> PNG dans le dossier de sortie
 
+## Densité variable par pièces (v0.2)
+Section « Pièces et densité » du panneau :
+- **Pièces séparées** : chaque îlot déconnecté est remeshé à part.
+- **Groupes de sommets** : en Edit Mode, sélectionne une zone (tête, corps, bras, jambes, cheveux...) et crée un groupe (Ctrl+G). Ajoute-le à la liste avec un multiplicateur de densité (ex. tête x3).
+  Les faces cibles sont réparties selon surface x densité. Un sommet n'appartient qu'au premier groupe de la liste qui le contient.
+- Les pièces sont ensuite fusionnées en un seul objet, mais **les jonctions ne sont pas soudées** : à raccorder à la main.
+- Si QuadriFlow échoue sur une pièce, elle est simplifiée en triangles (avertissement affiché).
+
 ## Installation
 Zipper le dossier `blender-auto-retopo` puis : Edit > Preferences > Get Extensions > Install from Disk.
 Panneau : Vue 3D > touche N > onglet **Retopo**.
