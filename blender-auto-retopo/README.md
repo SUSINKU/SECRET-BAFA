@@ -18,13 +18,11 @@ Section « Pièces et densité » du panneau :
 - Les pièces sont ensuite fusionnées en un seul objet, mais **les jonctions ne sont pas soudées** : à raccorder à la main.
 - Si QuadriFlow échoue sur une pièce, elle est simplifiée en triangles (avertissement affiché).
 
-## Vers une vraie topologie de visage (v0.3)
+## Vers une vraie topologie de visage (v0.4, 100 % gratuit)
 QuadriFlow ne sait pas où sont les yeux ou la bouche. Trois outils pour contrôler le flux des arêtes :
-1. **Outils avec guides** :
-   - *Instant Meshes* (gratuit) : exporte l'objet en OBJ. Si le chemin de l'exécutable est renseigné dans les préférences de l'add-on, il est lancé et le résultat importé. Sinon, ouvre l'OBJ dans Instant Meshes, trace les guides (outil Orientation), exporte, et réimporte dans Blender.
-   - *Quad Remesher* (payant, installé séparément) : le bouton appelle son opérateur ; compatibilité non vérifiée, sinon utiliser son panneau.
+1. **Instant Meshes** (gratuit, externe, optionnel) : exporte l'objet en OBJ. Si le chemin de l'exécutable est renseigné dans les préférences de l'add-on, il est lancé et le résultat importé. Sinon, ouvre l'OBJ dans Instant Meshes, trace les guides (outil Orientation), exporte, et réimporte dans Blender.
 2. **Retopo manuelle** : crée un objet collé sur le modèle (symétrie X, Shrinkwrap, accrochage aux faces, Poly Build). Place d'abord le curseur 3D sur le modèle.
-3. **Gabarit de visage** : tête 100 % quads (cube-sphère) avec boucles autour des yeux, de la bouche et des oreilles, symétrique, ouverte au cou. Elle est placée en haut de l'objet actif ; déplace/redimensionne (G/S) puis « Appliquer l'ajustement » (Shrinkwrap), et affine en Edit Mode avec l'édition proportionnelle. Le visage regarde vers -Y (réglable via Rotation Z).
+3. **Gabarit de visage** : tête 100 % quads (cube-sphère) avec boucles autour des yeux, de la bouche et des oreilles, symétrique, ouverte au cou. Elle est placée en haut de l'objet actif. **Repères** : place le curseur 3D (Shift+clic droit) sur chaque œil puis sur la bouche, clique le bouton correspondant (un repère est créé), puis « Ajuster le gabarit aux repères » : position, rotation et échelle sont calculées pour que les yeux et la bouche du gabarit tombent dessus. Ensuite « Appliquer l'ajustement » (Shrinkwrap), et affine en Edit Mode avec l'édition proportionnelle. Le visage regarde vers -Y (réglable via Rotation Z).
    Le gabarit est une base de travail : les boucles sont des anneaux rectangulaires insérés dans une grille, pas une topologie de visage « de production ».
 
 ## Installation

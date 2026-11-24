@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 3, 0),
+    "version": (0, 4, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -36,7 +36,7 @@ from bpy.props import (
     StringProperty,
 )
 from bpy.types import AddonPreferences, Operator, Panel, PropertyGroup
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 from . import face_template
 
@@ -579,36 +579,6 @@ class RETOPO_OT_instant_meshes(Operator):
         return {"FINISHED"}
 
 
-class RETOPO_OT_quad_remesher(Operator):
-    bl_idname = "retopo.quad_remesher"
-    bl_label = "Lancer Quad Remesher"
-    bl_description = "Appelle l'add-on Quad Remesher (payant, a installer separement) avec les faces cibles"
-    bl_options = {"REGISTER", "UNDO"}
-    poll = classmethod(_mesh_poll)
-
-    def execute(self, context):
-        s = context.scene.retopo_settings
-        try:
-            if not bpy.ops.qremesher.remesh.poll():
-                raise RuntimeError
-        except Exception:
-            self.report({"ERROR"}, "Quad Remesher n'est pas installe/active. Installe-le, puis relance (ou utilise son panneau).")
-            return {"CANCELLED"}
-        qs = getattr(context.scene, "qremesher", None)
-        if qs is not None:
-            try:
-                qs.target_count = s.target_faces
-            except Exception:
-                pass
-        try:
-            bpy.ops.qremesher.remesh()
-        except Exception as e:
-            self.report({"ERROR"}, f"Quad Remesher : {e}. Lance-le depuis son propre panneau.")
-            return {"CANCELLED"}
-        self.report({"INFO"}, "Quad Remesher lance. Pour les guides, utilise les outils de son panneau.")
-        return {"FINISHED"}
-
-
 class RETOPO_OT_manual_setup(Operator):
     bl_idname = "retopo.manual_setup"
     bl_label = "Preparer la retopo manuelle"
@@ -689,6 +659,7 @@ class RETOPO_OT_face_template(Operator):
         height = max(zs) - min(zs)
         r = s.template_head_ratio * height / 2
         obj = bpy.data.objects.new(f"{target.name}_facetemplate", mesh)
+        obj["retopo_template"] = True
         obj.location = ((min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2, max(zs) - r)
         obj.scale = (r, r, r)
         obj.rotation_euler.z = math.radians(s.template_rot_z)
@@ -719,6 +690,76 @@ class RETOPO_OT_template_apply(Operator):
 
     def execute(self, context):
         bpy.ops.object.modifier_apply(modifier="Fit")
+        return {"FINISHED"}
+
+
+class RETOPO_OT_set_landmark(Operator):
+    bl_idname = "retopo.set_landmark"
+    bl_label = "Placer un repere au curseur 3D"
+    bl_description = "Cree/deplace un repere (empty) a la position du curseur 3D. Place le curseur avec Shift+clic droit sur le modele"
+    bl_options = {"REGISTER", "UNDO"}
+    which: EnumProperty(
+        items=[
+            ("EYE_P", "Oeil", "Oeil a droite de l'ecran en vue de face"),
+            ("EYE_N", "Oeil", "Oeil a gauche de l'ecran en vue de face"),
+            ("MOUTH", "Bouche", "Centre de la bouche"),
+        ]
+    )
+
+    def execute(self, context):
+        name = f"LM_{self.which}"
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            obj = bpy.data.objects.new(name, None)
+            obj.empty_display_type = "SPHERE"
+            obj.empty_display_size = 0.02 * max(1.0, max(context.active_object.dimensions) if context.active_object else 1.0)
+            obj.show_in_front = True
+            context.collection.objects.link(obj)
+        obj.location = context.scene.cursor.location
+        return {"FINISHED"}
+
+
+class RETOPO_OT_fit_landmarks(Operator):
+    bl_idname = "retopo.fit_landmarks"
+    bl_label = "Ajuster le gabarit aux reperes"
+    bl_description = "Place, oriente et met a l'echelle le gabarit actif pour que ses yeux et sa bouche tombent sur les reperes"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        o = context.active_object
+        return o is not None and o.get("retopo_template") and context.mode == "OBJECT"
+
+    def execute(self, context):
+        obj = context.active_object
+        marks = [bpy.data.objects.get(n) for n in ("LM_EYE_P", "LM_EYE_N", "LM_MOUTH")]
+        if not all(marks):
+            self.report({"ERROR"}, "Place d'abord les 3 reperes (deux yeux et la bouche).")
+            return {"CANCELLED"}
+        ep, en, mo = (m.matrix_world.translation.copy() for m in marks)
+        lm = face_template.landmarks()
+        ex, ey, ez = lm["eye"]
+        mz = lm["mouth"][2]
+
+        xdir = ep - en
+        width = xdir.length
+        emid = (ep + en) / 2
+        zraw = emid - mo
+        zdir = zraw - xdir.normalized() * zraw.dot(xdir.normalized())
+        if width < 1e-9 or zdir.length < 1e-9:
+            self.report({"ERROR"}, "Reperes degeneres (yeux confondus ou bouche alignee avec les yeux).")
+            return {"CANCELLED"}
+        dz = zdir.length
+        xdir.normalize()
+        zdir.normalize()
+        ydir = zdir.cross(xdir)
+        sx = width / (2 * ex)
+        sz = dz / (ez - mz)
+        sy = (sx + sz) / 2
+        origin = emid - (ydir * sy * ey + zdir * sz * ez)
+        rot = Matrix((xdir * sx, ydir * sy, zdir * sz)).transposed().to_4x4()
+        obj.matrix_world = Matrix.Translation(origin) @ rot
+        self.report({"INFO"}, "Gabarit ajuste. Clique 'Appliquer l'ajustement' pour le coller a la surface.")
         return {"FINISHED"}
 
 
@@ -809,11 +850,10 @@ class RETOPO_PT_panel(Panel):
         self.layout.operator("retopo.run", icon="MOD_REMESH")
 
         box = self.layout.box()
-        box.label(text="Outils avec guides (meilleure topologie)")
+        box.label(text="Instant Meshes (gratuit, avec guides)")
         box.prop(s, "im_faces")
         box.prop(s, "im_crease")
         box.operator("retopo.instant_meshes", icon="EXPORT")
-        box.operator("retopo.quad_remesher", icon="MOD_REMESH")
 
         box = self.layout.box()
         box.label(text="Gabarit de visage")
@@ -821,6 +861,15 @@ class RETOPO_PT_panel(Panel):
         box.prop(s, "template_head_ratio")
         box.prop(s, "template_rot_z")
         box.operator("retopo.face_template", icon="MESH_MONKEY")
+        col = box.column(align=True)
+        col.label(text="Reperes (curseur 3D = Shift+clic droit) :")
+        op = col.operator("retopo.set_landmark", text="Oeil a droite de l'ecran", icon="PIVOT_CURSOR")
+        op.which = "EYE_P"
+        op = col.operator("retopo.set_landmark", text="Oeil a gauche de l'ecran", icon="PIVOT_CURSOR")
+        op.which = "EYE_N"
+        op = col.operator("retopo.set_landmark", text="Centre de la bouche", icon="PIVOT_CURSOR")
+        op.which = "MOUTH"
+        box.operator("retopo.fit_landmarks", icon="SNAP_ON")
         box.operator("retopo.template_apply", icon="CHECKMARK")
 
         box = self.layout.box()
@@ -828,7 +877,7 @@ class RETOPO_PT_panel(Panel):
         box.operator("retopo.manual_setup", icon="SNAP_FACE")
 
 
-classes = (RetopoPrefs, RETOPO_OT_instant_meshes, RETOPO_OT_quad_remesher, RETOPO_OT_manual_setup, RETOPO_OT_face_template, RETOPO_OT_template_apply, PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
+classes = (RetopoPrefs, RETOPO_OT_instant_meshes, RETOPO_OT_manual_setup, RETOPO_OT_set_landmark, RETOPO_OT_fit_landmarks, RETOPO_OT_face_template, RETOPO_OT_template_apply, PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
 
 
 def register():

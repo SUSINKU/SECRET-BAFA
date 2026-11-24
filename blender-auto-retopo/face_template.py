@@ -158,3 +158,11 @@ def build(res=12, ears=True, neck=True):
     verts = [verts[v] for v in used]
     faces = [[remap[v] for v in f] for f in faces]
     return verts, faces
+
+
+def landmarks():
+    """Positions (sphere unite, avant mise a l'echelle) de l'oeil cote +X et du centre de la bouche."""
+    return {
+        "eye": _spherify([1 / 3, -1.0, 1 / 6]),
+        "mouth": _spherify([0.0, -1.0, -5 / 12]),
+    }
