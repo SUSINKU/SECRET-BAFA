@@ -229,27 +229,18 @@ class RETOPO_OT_run(Operator):
         if s.pre_voxel_size > 0:
             _voxel_remesh(low, s.pre_voxel_size)
 
-        # 3. QuadriFlow
-        try:
-            res = bpy.ops.object.quadriflow_remesh(
-                use_mesh_symmetry=s.use_symmetry,
-                use_preserve_sharp=s.preserve_sharp,
-                use_preserve_boundary=s.preserve_boundary,
-                preserve_attributes=False,
-                smooth_normals=s.smooth_normals,
-                mode="FACES",
-                target_faces=s.target_faces,
-                seed=s.seed,
-            )
-        except RuntimeError as e:
-            self.report({"ERROR"}, f"QuadriFlow a echoue : {e}")
-            bpy.data.objects.remove(low)
+        # 3. QuadriFlow (avec nouvel essai apres voxel remesh si echec)
+        ok = self._quadriflow(s)
+        if not ok and s.pre_voxel_size == 0:
+            size = max(low.dimensions) / 250.0
+            if size > 0:
+                self.report({"INFO"}, f"QuadriFlow a echoue, nouvel essai apres voxel remesh ({size:.4f}).")
+                _voxel_remesh(low, size)
+                ok = self._quadriflow(s)
+        if not ok:
+            self.report({"ERROR"}, "QuadriFlow n'a pas abouti meme apres voxel remesh. Essaie d'augmenter 'Voxel pre-remesh' ou de reduire les faces cibles.")
             _select_only(context, high)
-            return {"CANCELLED"}
-        if "FINISHED" not in res:
-            self.report({"ERROR"}, "QuadriFlow n'a pas abouti (maillage non manifold ? essaie le voxel pre-remesh).")
-            bpy.data.objects.remove(low)
-            _select_only(context, high)
+            bpy.data.objects.remove(low, do_unlink=True)
             return {"CANCELLED"}
 
         # 4. reprojection
@@ -287,6 +278,22 @@ class RETOPO_OT_run(Operator):
         _select_only(context, low)
         self.report({"INFO"}, f"Retopo terminee : {len(low.data.polygons)} faces ({low.name}).")
         return {"FINISHED"}
+
+    def _quadriflow(self, s):
+        try:
+            res = bpy.ops.object.quadriflow_remesh(
+                use_mesh_symmetry=s.use_symmetry,
+                use_preserve_sharp=s.preserve_sharp,
+                use_preserve_boundary=s.preserve_boundary,
+                preserve_attributes=False,
+                smooth_normals=s.smooth_normals,
+                mode="FACES",
+                target_faces=s.target_faces,
+                seed=s.seed,
+            )
+        except RuntimeError:
+            return False
+        return "FINISHED" in res
 
     def _bake(self, context, high, low, s, out_dir):
         scene = context.scene
