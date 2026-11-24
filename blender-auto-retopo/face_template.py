@@ -71,7 +71,10 @@ def _select(verts, faces, axis, value, rect, axes):
 
 
 def _inset(verts, faces, region, t, axes):
-    """Insere un anneau de quads autour d'une region rectangulaire de faces."""
+    """Insere un anneau de quads autour d'une region rectangulaire de faces.
+
+    Retourne un dict : 'ring' (sommets internes crees), 'interior' (sommets internes
+    non crees), et le rectangle interieur (centre + demi-tailles) pour l'arrondi."""
     a, b = axes
     count = {}
     for fi in region:
@@ -87,7 +90,8 @@ def _inset(verts, faces, region, t, axes):
             if count[frozenset((u, v))] == 1:
                 boundary.append((u, v))
     bverts = {u for u, _ in boundary} | {v for _, v in boundary}
-    pts = [verts[v] for fi in region for v in faces[fi]]
+    allv = {v for fi in region for v in faces[fi]}
+    pts = [verts[v] for v in allv]
     amin, amax = min(p[a] for p in pts), max(p[a] for p in pts)
     bmin, bmax = min(p[b] for p in pts), max(p[b] for p in pts)
     copy = {}
@@ -101,6 +105,29 @@ def _inset(verts, faces, region, t, axes):
         faces[fi] = [copy.get(v, v) for v in faces[fi]]
     for u, v in boundary:
         faces.append([u, v, copy[v], copy[u]])
+    return {
+        "ring": list(copy.values()),
+        "interior": list(allv - bverts),
+        "axes": axes,
+        "center": ((amin + amax) / 2, (bmin + bmax) / 2),
+        "half": ((amax - amin) / 2 - t, (bmax - bmin) / 2 - t),
+    }
+
+
+def _round_ring(verts, info, r):
+    """Arrondit un anneau rectangulaire en ellipse (carre -> disque), melange r in [0, 1]."""
+    a, b = info["axes"]
+    ca, cb = info["center"]
+    ha, hb = info["half"]
+    if ha < 1e-9 or hb < 1e-9:
+        return
+    for v in info["ring"]:
+        u = (verts[v][a] - ca) / ha
+        w = (verts[v][b] - cb) / hb
+        u2 = u * math.sqrt(max(0.0, 1 - w * w / 2))
+        w2 = w * math.sqrt(max(0.0, 1 - u * u / 2))
+        verts[v][a] = ca + ha * (u + (u2 - u) * r)
+        verts[v][b] = cb + hb * (w + (w2 - w) * r)
 
 
 def _spherify(p):
@@ -113,31 +140,63 @@ def _spherify(p):
     ]
 
 
-def build(res=12, ears=True, neck=True):
+# Disposition sur la face avant (coordonnees du cube, x vers la droite, z vers le haut)
+EYE_X = (1 / 6, 1 / 2)      # oeil cote +X ; l'autre est symetrique
+EYE_Z = (0.0, 1 / 3)
+NOSE_X = (-1 / 6, 1 / 6)
+NOSE_Z = (-1 / 3, 0.0)
+MOUTH_X = (-1 / 3, 1 / 3)
+MOUTH_Z = (-2 / 3, -1 / 2)
+
+
+def build(res=12, ears=True, neck=True, nose=0.10, socket=0.03):
     """Retourne (verts, faces) : sphere unite, visage vers -Y, quads uniquement."""
     n = res
     cell = 2.0 / n
     verts, faces = _cube_grid(n)
     front = dict(axis=1, value=-1.0, axes=(0, 2))
+    eps = 0.001
+    eye_inner, eye_rings = [], []
+    nose_verts = []
 
-    # yeux : region 2x2 cellules (a n=12) de chaque cote, 2 boucles
+    def region_of(xr, zr):
+        return _select(verts, faces, rect=(xr[0] + eps, xr[1] - eps, zr[0] + eps, zr[1] - eps), **front)
+
+    # yeux : 2 boucles, arrondies progressivement
     for sx in (1, -1):
-        lo, hi = sorted((sx * 1 / 6 + sx * 0.001, sx * 0.5 - sx * 0.001))
-        region = _select(verts, faces, rect=(lo, hi, 0.001, 1 / 3 - 0.001), **front)
-        _inset(verts, faces, region, 0.40 * cell, front["axes"])
-        _inset(verts, faces, region, 0.30 * cell, front["axes"])
-    # bouche : region 4x1 cellules, 2 boucles
-    region = _select(verts, faces, rect=(-1 / 3 + 0.001, 1 / 3 - 0.001, -0.5 + 0.001, -1 / 3 - 0.001), **front)
-    _inset(verts, faces, region, 0.25 * cell, front["axes"])
-    _inset(verts, faces, region, 0.15 * cell, front["axes"])
-    # oreilles : region 2x2 sur les cotes, 1 boucle
+        xr = tuple(sorted((sx * EYE_X[0], sx * EYE_X[1])))
+        region = region_of(xr, EYE_Z)
+        r1 = _inset(verts, faces, region, 0.22 * cell, front["axes"])
+        r2 = _inset(verts, faces, region, 0.22 * cell, front["axes"])
+        eye_rings.append((r1, r2))
+        eye_inner += r2["ring"] + r2["interior"]
+    # nez : 1 boucle ronde
+    region = region_of(NOSE_X, NOSE_Z)
+    rn = _inset(verts, faces, region, 0.30 * cell, front["axes"])
+    nose_verts = rn["ring"] + rn["interior"]
+    # bouche : 2 boucles en lentille
+    region = region_of(MOUTH_X, MOUTH_Z)
+    m1 = _inset(verts, faces, region, 0.18 * cell, front["axes"])
+    m2 = _inset(verts, faces, region, 0.12 * cell, front["axes"])
+    # oreilles : 1 boucle
+    ear_rings = []
     if ears:
         for sx in (1, -1):
             region = _select(
                 verts, faces, axis=0, value=float(sx),
                 rect=(0.001, 1 / 3 - 0.001, -1 / 6 + 0.001, 1 / 6 - 0.001), axes=(1, 2),
             )
-            _inset(verts, faces, region, 0.3 * cell, (1, 2))
+            ear_rings.append(_inset(verts, faces, region, 0.3 * cell, (1, 2)))
+
+    # arrondi (apres tous les insets, pour ne pas fausser les rectangles)
+    for r1, r2 in eye_rings:
+        _round_ring(verts, r1, 0.5)
+        _round_ring(verts, r2, 1.0)
+    _round_ring(verts, rn, 1.0)
+    _round_ring(verts, m1, 0.6)
+    _round_ring(verts, m2, 1.0)
+    for e in ear_rings:
+        _round_ring(verts, e, 1.0)
 
     # ouverture du cou (face du bas, centre)
     if neck:
@@ -151,6 +210,11 @@ def build(res=12, ears=True, neck=True):
         ]
 
     verts = [_spherify(p) for p in verts]
+    # relief : nez en saillie, orbites legerement creusees
+    for v in set(nose_verts):
+        verts[v] = [c * (1 + nose) for c in verts[v]]
+    for v in set(eye_inner):
+        verts[v] = [c * (1 - socket) for c in verts[v]]
 
     # compacter les sommets inutilises
     used = sorted({v for f in faces for v in f})
@@ -162,7 +226,10 @@ def build(res=12, ears=True, neck=True):
 
 def landmarks():
     """Positions (sphere unite, avant mise a l'echelle) de l'oeil cote +X et du centre de la bouche."""
+    ex = (EYE_X[0] + EYE_X[1]) / 2
+    ez = (EYE_Z[0] + EYE_Z[1]) / 2
+    mz = (MOUTH_Z[0] + MOUTH_Z[1]) / 2
     return {
-        "eye": _spherify([1 / 3, -1.0, 1 / 6]),
-        "mouth": _spherify([0.0, -1.0, -5 / 12]),
+        "eye": _spherify([ex, -1.0, ez]),
+        "mouth": _spherify([0.0, -1.0, mz]),
     }

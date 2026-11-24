@@ -13,7 +13,7 @@ La haute resolution n'est jamais modifiee.
 bl_info = {
     "name": "Auto Retopo Character",
     "author": "SUSINKU",
-    "version": (0, 4, 0),
+    "version": (0, 5, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Retopo",
     "description": "Retopologie QuadriFlow + UV + bake de normales pour personnages",
@@ -667,7 +667,10 @@ class RETOPO_OT_face_template(Operator):
 
         sw = obj.modifiers.new("Fit", "SHRINKWRAP")
         sw.target = target
-        sw.wrap_method = "NEAREST_SURFACEPOINT"
+        try:
+            sw.wrap_method = "TARGET_PROJECT"
+        except TypeError:
+            sw.wrap_method = "NEAREST_SURFACEPOINT"
         _select_only(context, obj)
         self.report(
             {"INFO"},
@@ -760,6 +763,34 @@ class RETOPO_OT_fit_landmarks(Operator):
         rot = Matrix((xdir * sx, ydir * sy, zdir * sz)).transposed().to_4x4()
         obj.matrix_world = Matrix.Translation(origin) @ rot
         self.report({"INFO"}, "Gabarit ajuste. Clique 'Appliquer l'ajustement' pour le coller a la surface.")
+        return {"FINISHED"}
+
+
+class RETOPO_OT_auto_face(Operator):
+    bl_idname = "retopo.auto_face"
+    bl_label = "Visage en un clic"
+    bl_description = (
+        "Cree le gabarit de visage, l'ajuste aux reperes (s'ils sont places, sinon placement automatique "
+        "sur le haut de l'objet) et l'applique a la surface"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+    poll = classmethod(_mesh_poll)
+
+    def execute(self, context):
+        target = context.active_object
+        bpy.ops.retopo.face_template()
+        obj = context.active_object
+        if obj is None or not obj.get("retopo_template"):
+            return {"CANCELLED"}
+        marks = [bpy.data.objects.get(n) for n in ("LM_EYE_P", "LM_EYE_N", "LM_MOUTH")]
+        if all(marks):
+            bpy.ops.retopo.fit_landmarks()
+            how = "ajuste aux reperes"
+        else:
+            how = "placement automatique (place les 3 reperes pour un meilleur resultat)"
+        bpy.ops.retopo.template_apply()
+        obj.name = f"{target.name}_face"
+        self.report({"INFO"}, f"Visage cree : {how}.")
         return {"FINISHED"}
 
 
@@ -860,6 +891,7 @@ class RETOPO_PT_panel(Panel):
         box.prop(s, "template_res")
         box.prop(s, "template_head_ratio")
         box.prop(s, "template_rot_z")
+        box.operator("retopo.auto_face", icon="USER")
         box.operator("retopo.face_template", icon="MESH_MONKEY")
         col = box.column(align=True)
         col.label(text="Reperes (curseur 3D = Shift+clic droit) :")
@@ -877,7 +909,7 @@ class RETOPO_PT_panel(Panel):
         box.operator("retopo.manual_setup", icon="SNAP_FACE")
 
 
-classes = (RetopoPrefs, RETOPO_OT_instant_meshes, RETOPO_OT_manual_setup, RETOPO_OT_set_landmark, RETOPO_OT_fit_landmarks, RETOPO_OT_face_template, RETOPO_OT_template_apply, PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
+classes = (RetopoPrefs, RETOPO_OT_instant_meshes, RETOPO_OT_manual_setup, RETOPO_OT_set_landmark, RETOPO_OT_fit_landmarks, RETOPO_OT_auto_face, RETOPO_OT_face_template, RETOPO_OT_template_apply, PartItem, RetopoSettings, RETOPO_OT_part_add, RETOPO_OT_part_remove, RETOPO_OT_run, RETOPO_PT_panel)
 
 
 def register():
